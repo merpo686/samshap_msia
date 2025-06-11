@@ -4,6 +4,7 @@ Sujet : https://proceedings.neurips.cc/paper_files/paper/2023/file/44cdeb5ab7da3
 
 Implémentation du modèle EAC (Explain Any Concept).
 
+
 MEMO vérif code : python -m pylama -l all --pydocstyle-convention pep257 *.py
     # python -m pylama -l eradicate,mccabe,pycodestyle,pydocstyle,pyflakes,pylint,radon,vulture,isort --pydocstyle-convention pep257
     # python -m mypy
@@ -13,7 +14,7 @@ MEMO vérif code : python -m pylama -l all --pydocstyle-convention pep257 *.py
 import importlib
 importlib.reload(p)
 """
-__author__ = ['Nicolas Allègre', 'Louis Borreill', 'Merlin Poitou', 'Julian Sliva']
+__author__ = ['Nicolas Allègre', 'Louis Borreill', 'Merlin Poitou']
 __date__ = '17/05/2025'
 __version__ = '0.1'
 
@@ -48,7 +49,8 @@ DEFAULT_SAVE_FOLDER: Final[str] = "results"
 DEFAULT_LOG_FOLDER: Final[str] = "logs"
 DEFAULT_LOG_FILENAME: Final[str] = "pipeline.log"
 DEFAULT_MODEL_FOLDER: Final[str] = "checkpoints"
-DEFAULT_SAM_MODEL: Final[str] = "vit_h"
+DEFAULT_SAM_MODEL: Final[str] = "vit_b"
+DEFAULT_MODEL_TEST:: Final[str] = "resnet18"
 
 DEVICE_GLOBAL: Final = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -81,7 +83,7 @@ class Model_PIE(torch.nn.Module):
         if dim_in is None or dim_fc is None:
             return None
 
-        self.linear = torch.nn.Sequential(nn.Linear(dim_in, dim_fc))
+        self.linear = torch.nn.Sequential(torch.nn.Linear(dim_in, dim_fc))
         self.model_fc = model_fc
     
     def forward(self, x, with_fc: bool = True):
@@ -100,6 +102,7 @@ class Model_PIE(torch.nn.Module):
         output.backward()
         optimizer.step()
         return output.detach().cpu().numpy()
+
 
 class Model_EAC:
     """Le modèle EAC.

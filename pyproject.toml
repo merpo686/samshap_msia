@@ -15,10 +15,9 @@ where = ["src"]  # list of folders that contain the packages (["."] by default)
 [project]
 name = "EAC samshap"
 authors = [
-    {name = "François-Xavier", email = "francois-xavier.morel@telecom-paris.fr"},
-    {name = "Luca Hachina", email = "luca.hachani@telecom-paris.fr"},
     {name = "Nicolas Allègre", email = "nicolas.allegre@telecom-paris.fr"},
-    {name = "Sarah Garcia", email = "sarah.garcia@telecom-paris.fr"},
+    {name = "Louis Borreill", email = "louis.borreill@telecom-paris.fr"},
+    {name = "Merlin Poitou", email = "merlin.poitou@telecom-paris.fr"},
 ]
 # maintainers = [
 #     {name = "...", email = "..."}

@@ -8,3 +8,11 @@ Implémentation du papier EAC
 ## **Description :**
 
 ...
+
+## **Étudiants :**
+
+| Name               | GitHub Profile                              |
+|--------------------|---------------------------------------------|
+| **Nicolas ALLÈGRE**| [nicolas-allegre](https://github.com/nicolas-allegre) |
+| **Louis Borreill**   | [...](https://github.com/...) |
+| **Merlin Poitou**   | [merpo686](https://github.com/merpo686) |
