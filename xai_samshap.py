@@ -15,8 +15,8 @@ import importlib
 importlib.reload(p)
 """
 __author__ = ['Nicolas Allègre', 'Louis Borreill', 'Merlin Poitou']
-__date__ = '17/05/2025'
-__version__ = '0.1'
+__date__ = '11/06/2025'
+__version__ = '0.2'
 
 ###############################################################################
 # IMPORTS :
@@ -36,10 +36,10 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 import torch
+import torchvision
 import torchvision.transforms.v2 as transforms
 from PIL import Image
 from pprint import pprint
-from torchvision.models import resnet18
 
 # /* Module interne */
 IA_AGENT_SAM_FOLDER = "SAM"
@@ -50,6 +50,7 @@ from SAM.segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 # CONSTANTES :
 EXIT_OK: Final[int] = 0
 
+DEFAULT_SAVE_MODEL_FILENAME: Final[str] = "pie.pth"
 DEFAULT_SAVE_FOLDER: Final[str] = "results"
 DEFAULT_LOG_FOLDER: Final[str] = "logs"
 DEFAULT_LOG_FILENAME: Final[str] = "pipeline.log"
@@ -72,23 +73,17 @@ DEFAULT_TRANSFORM_IMAGENET = transforms.Compose(IMG_RESIZE + IMG_CONVERT_TENSOR 
 # CLASSES PROJET :
 class Model_PIE(torch.nn.Module):
     """Le modèle PIE d'EAC.
-
-    ============
-    Attributs :
-        
-
-    ============
-    Méthodes :
-        ...
     """
 
-    def __init__(self, pie_args: dict | None = None, model_fc=None):
+    def __init__(self, pie_args: dict | None = None, model_fc=None, logger_master=None):
         """Initialise le PIE.
 
         :param (dict) pie_args:     argument de configuration du PIE
         :param model_fc:            la dernière couche du modèle à expliquer.
         """
         super().__init__()
+        
+        self.logger = logger_master
         if pie_args is None:
             pie_args = {}
         dim_in = pie_args.get("dim_in") 
@@ -100,79 +95,95 @@ class Model_PIE(torch.nn.Module):
         self.model_fc = model_fc
     
     def forward(self, x, with_fc: bool = True):
+        """Effectue l'inférence du modèle.
+        
+        :param x:   l'entrée
+        :param (bool) with_fc:  détermine s'il faut prédire avec fc comme dernière couche
+        :return:    la prédiction
+        """
         out = self.linear(x)
         if self.model_fc != None and with_fc:
             out = self.model_fc(out)
         return out
 
-    def train(self, f_model, image, list_of_mask, transform_img, n_samples:int = 10, device=DEVICE_GLOBAL):
-        """Entraîne un PIE pour un image et model donnée.
-        
-        Defines the PIE network, generate the training set (n images of masks fused)
-          runs the f_model on the training set, keeps the output probabilities, then
-          trains the surrogate model (PIE) with crossentropy and fc fixed to have the same
-          outputs probabilities as the f_model ones
-        :param image:   l'image pré-tranformé
+    def logging(self, msg: str, level: int | str = logging.INFO, **kwargs):
+        """Permet de logger.
+
+        :param (str) msg:   message à logger
+        :param (int | str) level: [défaut INFO] niveau de log (cf. logging)
         """
+        if self.logger is not None:
+            self.logger.logging(msg, level=level, caller_name=self.__class__.__name__, **kwargs)
+        else:
+            print(msg)
+
+    def training_pie(self, f_model, image, list_of_mask, transform_img=None,
+              n_samples:int = 10, num_epochs: int = 10, device=DEVICE_GLOBAL):
+        """Entraîne ce PIE pour une image et model donnée.
+        
+        Génère un jeu d'image d'entraînement (n image composé de sous-set de mask),
+        et récupère leurs probabilitiés de prédiction, puis entraine le PIE sur
+        ce trainset.
+        
+        :param f_model:         le modèle cible
+        :param image:           l'image pré-tranformée
+        :param list_of_mask:    les masques pour l'image
+        :param transform_img:   la torchvision transforms à utiliser avec le réseau cible
+        :param n_samples:       nombre d'échantillon de sous-image masqué pour l'entraînement
+        :param num_epochs:      quantité d'epoch
+        :param device:          le device d'exécution
+        """
+        self.logging("PIE : Début entraînement.")
+        if transform_img is None:
+            transform_img = DEFAULT_TRANSFORM_IMAGENET
+        
         f_model = f_model.to(device).eval()
         model_pie = self.to(device).train()
-        # model_pie = PIE_network(n_concept=n_concept, fc_layer=fc_layer).to('cuda') # Use the class definition directly
         
         n_concept = len(list_of_mask)
         fc_layer = f_model.fc
         for param in model_pie.model_fc.parameters():
           param.requires_grad = False
       
-        # Generate training data
+        # 1-Création des images masqués par sous-ensemble pour l'entraînement du PIE
+        # 1.1 création liste de tous les sous-ensemble
         # idx_mask_combinations = [list(combinations(range(n_concept), r)) for r in range(1, n_concept+1)]
+        # idx_mask_combinations = [list(sublist) for g in idx_mask_combinations for sublist in g]
+        # Changement, nombre de sous-ensemble est l'arrangement donc n! et donc au-delà de 20 Python ne gère pas et MemoryError
         list_images, list_combinations, _ = self._image_to_masks_mc(image, list_of_mask, n_samples)
       
-        # Get target probabilities from f_model
+        # 2-Récupération des probabilités de prédiction du modèle
         target_probabilities = []
         for masked_image in list_images:
-            # Preprocess the image for f_model (resize, normalize, etc. - this depends on f_model's expected input)
-            # For simplicity, assuming f_model takes a numpy array and returns probabilities
-            # You might need to add image preprocessing here
+            input_tensor = transform_img(masked_image).to(device)
             with torch.no_grad():
-                # Convert numpy array to torch tensor and add batch dimension
-                input_tensor = torch.from_numpy(masked_image).permute(2, 0, 1).unsqueeze(0).float().to(f_model.fc.weight.device) # Ensure tensor is on the same device as the model
-                output = f_model(input_tensor)
+                output = f_model(input_tensor.unsqueeze(0))
                 probabilities = torch.softmax(output, dim=1)
-                target_probabilities.append(probabilities.squeeze().cpu().numpy()) # Move to CPU for numpy conversion
+                target_probabilities.append(probabilities.squeeze().cpu().numpy())
       
-        # Prepare data for training PIE
-        # The input to PIE will be a vector representing the mask combination
-        # The target will be the probabilities from f_model
-      
+        # 3-Préparation des données d'entraînement
         input_data = []
         for combo in list_combinations:
             concept_vector = np.zeros(n_concept)
             concept_vector[combo] = 1
             input_data.append(concept_vector)
       
-        input_data = torch.tensor(input_data, dtype=torch.float32).to(f_model.fc.weight.device) # Ensure tensor is on the same device as the model
-        target_probabilities = torch.tensor(target_probabilities, dtype=torch.float32).to(f_model.fc.weight.device) # Ensure tensor is on the same device as the model
-      
-        # Define loss function and optimizer
-        criterion = torch.nn.CrossEntropyLoss() # Or other appropriate loss for probability matching
-        optimizer = torch.optim.Adam(model_pie.network.parameters(), lr=0.001) # Adjust learning rate
-      
-        # Training loop
-        num_epochs = 10 # You can adjust the number of epochs
+        input_data = torch.tensor(np.array(input_data), dtype=torch.float32).to(device)
+        target_probabilities = torch.tensor(np.array(target_probabilities), dtype=torch.float32).to(device)
+        
+        # 4-Entraînement du PIE
+        criterion = torch.nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(model_pie.parameters(), lr=0.001)
         for epoch in range(num_epochs):
-            # Forward pass
             outputs = model_pie(input_data)
             loss = criterion(outputs, target_probabilities)
-      
-            # Backward and optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-      
-            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
-      
-        return model_pie # Return the trained PIE model
 
+            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+    @staticmethod
     def _image_to_masks_mc(image: npt.NDArray, list_of_mask: list[npt.NDArray], n_mc_sample: int = 50):
         """Crée un échantillonnage Monté-Carlo d'image d'un sous-ensemble de masque.
         
@@ -190,7 +201,7 @@ class Model_PIE(torch.nn.Module):
             # 2-Choix des indices mask
             indices_to_fuse = np.random.choice(num_masks, num_to_fuse, replace=False)
             # 3-Fusionner les masques choisis
-            fused_mask = _fuse_masks(list_of_mask, indices_to_fuse)
+            fused_mask = Model_PIE._fuse_masks(list_of_mask, indices_to_fuse)
             # 4-Créer la nouvelle image
             masked_image = image * np.stack([fused_mask] * 3, axis=-1)
             
@@ -199,12 +210,13 @@ class Model_PIE(torch.nn.Module):
         
         return list_images, list_combinations, fused_mask
 
+    @staticmethod
     def _fuse_masks(list_of_mask, list_idx):
         """Fusionne plusieurs masque.
         
         :param list_of_mask:    liste des masques
-        Takes list of masks, the number of masks to fuse
-        returns a mask containing all the fused masks (fused by or logic)
+        :param list_idx:        liste des indices des masques à fusionner
+        :return:    le masque global fusionné des sous-masque donnés
         """
         new_mask = np.zeros(list_of_mask[0].shape)
         if not isinstance(list_idx, Iterable):
@@ -246,13 +258,13 @@ class Model_EAC:
     }
     name = "EAC"
 
-    def __init__(self, model: torch.nn.Module | None = None,
+    def __init__(self, model: torch.nn.Module | None = None, image: Any | None = None,
                  sam_args: dict | None = None, pie_args: dict | None = None,
                  device=DEVICE_GLOBAL):
         """Initialise la classe.
         """
         self.results: dict = {}
-        self.image = None
+        self.image: npt.NDArray = None
         self.logger: logging.Logger = self._create_logger()
         self.device: torch.device = device
         self.model_fc = None
@@ -264,14 +276,27 @@ class Model_EAC:
         if sam_args is not None and sam_args.get("other_model") is not None:
             self.sam = sam_args["other_model"]
         else:
-            self.sam = self.load_sam(sam_args).to(self.device)
+            self.sam = self.load_sam(sam_args)
 
         if pie_args is not None and pie_args.get("other_model") is not None:
             self.pie = pie_args["other_model"]
-        else:
-            self.pie = self.load_pie(pie_args).to(self.device)
+        elif pie_args:
+            self.pie = self.load_pie(pie_args)
+        
+        if self.sam is not None:
+            self.sam = self.sam.to(self.device)
+        if self.pie is not None:
+            self.pie = self.pie.to(self.device)
+        
+        if image is not None:
+            self.image = self.load_img(image)
 
     def _create_logger(self, filepath: str | None = None) -> logging.Logger:
+        """Création et configuration d'un loggeur.
+        
+        :param filepath: chemin de sauvegarde du fichier des logs.
+        :return:    le logger ainsi créé
+        """
         tmp_txt = ""
         self.file = sys.stdout
         if filepath is not None:
@@ -315,11 +340,12 @@ class Model_EAC:
 
         return tmp_obj
 
-    def logging(self, msg: str, level: int | str = logging.INFO, caller_name: str = "", **kwargs):
+    def logging(self, msg: str, level: int | str = logging.INFO,
+                caller_name: str = "", **kwargs):
         """Permet l'appel et wrapper sur la classe `logging.Logger`.
 
         :param (str) msg:   message à logger
-        :param (int | str): [défaut INFO] niveau de log (cf. logging)
+        :param (int | str) level: [défaut INFO] niveau de log (cf. logging)
         :param (str) caller_name:   nom du logger à afficher dans les logs
         """
         log_fct = {
@@ -353,6 +379,7 @@ class Model_EAC:
         self.model = None
         self.model_fc = None
         if model is not None:
+            self.logging(f"Chargement du modèle à expliquer : {type(model)} ...")
             self.model = model.to(self.device)
             self.model.eval()
             self.model_fc = self.model.fc
@@ -403,11 +430,44 @@ class Model_EAC:
             pie_args["model_dir"]     le dossier où sont les poids
         :return (Model_PIE):    le modèle PIE demandé
         """
+        model = None
         if pie_args is not None:
             self.logging(f"Chargement du PIE avec {pie_args=}")
-            model = Model_PIE(pie_args, self.model_fc)
+            model = Model_PIE(pie_args, self.model_fc, logger_master=self)
 
         return model
+
+    def load_img(self, args: dict | str,
+                 transform_PIL=DEFAULT_TRANSFORM_BEGIN) -> npt.NDArray | None:
+        """Charge l'image à partir d'un fichier et la prépare.
+        
+        :param (dict | str) args: les arguments contenant le chemin ou directement le chemin
+            args["input"]   arg ligne de commande pour le chemin de l'image
+        :param transform_PIL:    la transformation PIL initiale (Par défaut resize)
+        :return (np.array):    l'image préparé
+        """
+        if args is None or (isinstance(args, dict) and args.get("input") is None):
+            self.logging("Image non donnée !", level=logging.WARNING)
+            return None
+        if isinstance(args, np.ndarray):
+            return args
+        
+        image_filename = args
+        if isinstance(image_filename, dict):
+            image_filename = args["input"]
+        
+        if not os.path.exists(image_filename):
+            self.logging(f"Chemin image non trouvé {image_filename}!", level=logging.WARNING)
+            return None
+        
+        self.logging(f"Chargement img de {image_filename}")
+        image_PIL = Image.open(image_filename)
+        image_PIL = image_PIL.convert("RGB")
+        
+        if transform_PIL is not None:
+            image_PIL = transform_PIL(image_PIL)
+        
+        return np.array(image_PIL)
 
     def run_sam(self, args: dict | None = None, mode="mask"):
         """Exécute SAM.
@@ -450,30 +510,20 @@ class Model_EAC:
             args = {}
 
         # 1- Récupération image
-        image_rgb = args.get("sam_img_in")
-        if image_rgb is None:
-            self.logging("image non donnée !", level=logging.WARNING)
-            return
-        if isinstance(image_rgb, str):
-            image_filename = image_rgb
-            if not os.path.exists(image_filename):
-                self.logging(f"chemin image non trouvée {image_filename}!", level=logging.WARNING)
-                return
-            self.logging(f"Chargement img {image_filename}")
-            image_PIL = Image.open(image_rgb)
-            image_PIL = image_PIL.convert("RGB")
-            image_rgb = np.array(image_PIL)
+        image_rgb = self.load_img(args.get("sam_img_in"), transform_PIL=None)
 
         # 2. Prédire avec SAM
         sam_result = None
         if mode == "mask":
+            self.logging(f"SAM : exécution SAM en mode {mode} pour image={image_rgb.shape} ({image_rgb.dtype}):")
             sam_args = args.get("SamAutomaticMaskGenerator", {})
             sam_args["model"] = self.sam
             # mask_generator = SamAutomaticMaskGenerator(self.sam)
             mask_generator = SamAutomaticMaskGenerator(**sam_args)
             sam_result = mask_generator.generate(image_rgb)
+            self.logging(f"SAM : nb_mask={len(sam_result)}")
         else:
-            self.logging(f"Exécution non implémenté {mode}", level=logging.WARNING)
+            self.logging(f"SAM : Exécution non implémenté {mode}", level=logging.WARNING)
 
         # Rappel : nous on va vouloir avoir besoin de self.results["sam"][i]["segmentation"]
         self.results["sam"] = sam_result
@@ -484,30 +534,17 @@ class Model_EAC:
         :param (dict) args: les arguments de la fonction
         """
         results: dict[str, Any] = {}
-
+        self.logging(f"EAC : Début exécution.")
         if args is None:
             args = {}
-        is_print = args.get("print", False)
-        if is_print:
-            print("Exécution de ", self.name)
         
         # 1- Récupération image
-        image_rgb = args.get("sam_img_in")
+        image_rgb = self.load_img(args.get("sam_img_in"), transform_PIL=None)
         if image_rgb is None:
-            self.logging("image non donnée !", level=logging.WARNING)
             return
-        if isinstance(image_rgb, str):
-            image_filename = image_rgb
-            if not os.path.exists(image_filename):
-                self.logging(f"chemin image non trouvée {image_filename}!", level=logging.WARNING)
-                return
-            self.logging(f"Chargement img {image_filename}")
-            image_PIL = Image.open(image_rgb)
-            image_PIL = image_PIL.convert("RGB")
-            args["sam_img_in"] = np.array(DEFAULT_TRANSFORM_BEGIN(image_PIL))
-            image_rgb = args["sam_img_in"]
         
         # 2-Exécution de SAM
+        self.logging(f"EAC : Exécution de SAM sur {image_rgb.shape} ...")
         self.run_sam(args)
         list_of_mask = np.array([i['segmentation'].tolist() for i in self.results["sam"]])
         
@@ -515,23 +552,82 @@ class Model_EAC:
         pie_args = {}
         pie_args["dim_in"] = len(list_of_mask)
         pie_args["dim_fc"] = self.model_fc.in_features
-        self.load_pie(pie_args)
+        self.pie = self.load_pie(pie_args)
         
         # 4-Entraînement PIE
-        
+        self.logging("EAC : Entraînement du PIE ...")
+        self.pie.training_pie(self.model, image_rgb, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET, n_samples=10, num_epochs=10)
         
         # 5-Calcul de la Shapley-values
-        
+        self.logging("EAC : Calcul des valeurs de Shapley todo...")
         
         # 6-Récupérer des concepts explicatifs.
+        
+        self.results["mask"] = ... # Mettre l'image masqué avec le masque explicatif
 
+        self.logging(f"EAC : Fin exécution.")
+
+    def save(self, mode: Literal["all", "model", "results"] = "all",
+             args: dict | None = None):
+        """Sauvegarde le modèle entraîné ou les résultats.
+
+        :param (str) mode:  spécifie quoi enregistrer ["all", "model", "results"]
+        :param (dict) args: les arguments d'enregistrement
+            args["save_filepath"]
+            args["save_is_print"]
+        """
+        if mode in ("all", "model"):
+            self.save_model(args)
+        if mode in ("all", "results"):
+            self.save_results(args)
+        return
+    
+    def save_model(self, args: dict | None = None):
+        """Sauvegarde le modèle.
+
+        :param (dict) args: les arguments pour la sauvegarde du modèle
+            args["model_save_filename"]
+            args["model_save_folder"]
+        """
+        if args is None:
+            args = {}
+        filename = args.get("model_save_filename", DEFAULT_SAVE_MODEL_FILENAME)
+        foldername = args.get("model_save_folder", DEFAULT_SAVE_FOLDER)
+        return
+    
+    def save_results(self, args: dict | None = None):
+        """Sauvegarde les résultats.
+
+        :param (dict) args: les arguments pour la sauvegarde du modèle
+            args["results_save_filename"]   préfixe du nom de fichier "SAM" par défaut
+            args["results_save_folder"]
+        """
+        if args is None:
+            args = {}
+
+        filename = args.get("results_save_filename", "EAC")
+        foldername = args.get("results_save_folder", DEFAULT_SAVE_FOLDER)
+        args["results_save_filename"] = filename
+        args["results_save_folder"] = foldername
+        os.makedirs(foldername, exist_ok=True)
+        img_mask_filename = f"{filename}_mask.jpg"
+        img_bg_filename = f"{filename}_without_bg.jpg"
+
+        img_to_save = []
+        if self.results.get("mask") is not None:
+            img_mask_PIL = Image.fromarray(self.results["mask"])
+            img_to_save.append((img_mask_PIL, img_mask_filename))
+
+        # sauvegarde des images
+        for img, filename in img_to_save:
+            filepath = os.path.join(foldername, filename)
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            self.logger(f"Sauvegarde des résultats : {filepath}")
+            img.save(filepath)
 
 
 ###############################################################################
 # FONCTIONS PROJET :
-
-
-###############################################################################
 def run_process(args: dict | None = None) -> Model_EAC:
     """Exécute le déroulé du programme.
 
@@ -586,18 +682,11 @@ def run_process(args: dict | None = None) -> Model_EAC:
     if args.get("input") is None and args.get("sam_img_in") is None:
         print("SAM a besoin d'image or aucune image n'a été fournie !")
         return
-    if args["sam_img_in"] is None:
-        image_filename = args["input"]
-        if not os.path.exists(image_filename):
-            print(f"Chemin image non trouvée {image_filename}!")
-            return
-        print(f"Chargement img {image_filename}")
-        image_PIL = Image.open(image_filename)
-        image_PIL = image_PIL.convert("RGB")
-        args["sam_img_in"] = np.array(DEFAULT_TRANSFORM_BEGIN(image_PIL))
 
-    # model_type [--model-type VIT_TYPE] = (str) "vit_h", "vit_l", "vit_b"
-    args["model_type"] = args.get("model_type", DEFAULT_SAM_MODEL)
+    # sam_type [--model_type VIT_TYPE] = (str) "vit_h", "vit_l", "vit_b"
+    args["sam_type"] = args.get("sam_type", DEFAULT_SAM_MODEL)
+    # model [--model VIT_TYPE] = (str)
+    args["model"] = args.get("model", DEFAULT_MODEL_TEST)
 
     ###
     # Gestion du flux d'exécution
@@ -606,14 +695,17 @@ def run_process(args: dict | None = None) -> Model_EAC:
 
     # 1- Chargement du modèle EAC
     sam_args = {}
-    sam_args["model_type"] = args["model_type"]
+    sam_args["sam_type"] = args["sam_type"]
     sam_args["model_dir"] = args["checkpoint"]
     model_xai = Model_EAC(sam_args=sam_args)
+    
+    if args["sam_img_in"] is None:
+        args["sam_img_in"] = model_xai.load_img(args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
 
     # 2- Suivant la tâche exécution de celle-ci
-    f_model = resnet18()
+    f_model = torchvision.models.get_model(args["model"])
     model_xai.load_model_to_explain(f_model)
-    model_xai.run(args, f_model)
+    model_xai.run(args)
 
     return model_xai
 
@@ -657,8 +749,10 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
                         help="[défaut=checkpoints] dossier où sont les poids des modèles.")
     parser.add_argument("--device", type=str, default="cpu",
                         help="[défaut=cpu] device où charger le modèle [auto, cpu, cuda, torch_directml]")
-    parser.add_argument("--model_type", type=str, choices=list_model_SAM, default=DEFAULT_SAM_MODEL,
+    parser.add_argument("--sam_type", type=str, choices=list_model_SAM, default=DEFAULT_SAM_MODEL,
                         help="[défaut=vit_h] modèle VIT de SAM [vit_h, vit_l, vit_b]")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL_TEST,
+                        help="[Défaut=resnet18] modèle à tester (de torchvision)")
     parser.add_argument("--output", type=str, nargs='?', default=DEFAULT_SAVE_FOLDER,
                         help="[défaut=results] chemin du dossier de sortie")
     parser.add_argument("--input", type=str,
