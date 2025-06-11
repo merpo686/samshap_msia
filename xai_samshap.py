@@ -733,7 +733,7 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
     # 2 - Création du parseur à arguments:
     parser = argparse.ArgumentParser(prog="EAC",
                                      description="Lance la XAI avec le EAC.",
-                                     epilog="Exemples : ... ")
+                                     epilog="Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda ")
 
     # 3 - Définition des arguments :
     parser.add_argument("--task", type=str, choices=list_task_agentIA, default="run",
