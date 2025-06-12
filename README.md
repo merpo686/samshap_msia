@@ -26,6 +26,7 @@ sed -i \"s/torch.load(f)/torch.load(f, weights_only=True)/g\" SAM/segment_anythi
 python xai_samshap.py -h
 usage: EAC [-h] [--task {run}] [--logfile [LOGFILE]] [--savefile [SAVEFILE]] [--nolog] [--checkpoint CHECKPOINT]
            [--device DEVICE] [--sam_type {vit_h,vit_l,vit_b}] [--model MODEL] [--output [OUTPUT]] [--input INPUT]
+           [--shapley_mc SHAPLEY_MC] [--pie_mc PIE_MC] [--pie_epoch PIE_EPOCH]
 
 Lance la XAI avec le EAC.
 
@@ -44,9 +45,13 @@ options:
   --model MODEL         [Défaut=resnet18] modèle à tester (de torchvision)
   --output [OUTPUT]     [défaut=results] chemin du dossier de sortie
   --input INPUT         chemin de l'image d'entrée
+  --shapley_mc SHAPLEY_MC
+                        [défault=10000] échantillonnage Monté-Carlo pour les valeurs de Shapley.
+  --pie_mc PIE_MC       [défault=2500] échantillonnage Monté-Carlo pour l'entraînement PIE.
+  --pie_epoch PIE_EPOCH
+                        [défault=10] epoch pour l'entraînement PIE.
 
-Exemples :
-    python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda
+Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda
 ```
 
 #### **Usage Python :**

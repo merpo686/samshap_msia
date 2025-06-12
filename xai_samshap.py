@@ -58,6 +58,8 @@ DEFAULT_MODEL_FOLDER: Final[str] = "checkpoints"
 DEFAULT_SAM_MODEL: Final[str] = "vit_b"
 DEFAULT_MODEL_TEST: Final[str] = "resnet18"
 DEFAULT_SHAPLEY_MC_SAMPLING: Final[int] = 10_000
+DEFAULT_PIE_MC_SAMPLING: Final[int] = 2_500
+DEFAULT_PIE_EPOCH: Final[int] = 10
 
 DEVICE_GLOBAL: Final = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -555,6 +557,10 @@ class Model_EAC:
         if args is None:
             args = {}
 
+        args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
+        args["pie_mc"] = args.get("pie_mc", DEFAULT_PIE_MC_SAMPLING)
+        args["pie_epoch"] = args.get("pie_epoch", DEFAULT_PIE_EPOCH)
+
         # 1- Récupération image
         image_rgb = self.load_img(args.get("sam_img_in"), transform_PIL=None)
         if image_rgb is None:
@@ -573,11 +579,12 @@ class Model_EAC:
 
         # 4-Entraînement PIE
         self.logging("EAC : Entraînement du PIE ...")
-        self.pie.training_pie(self.model, image_rgb, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET, n_samples=10, num_epochs=10)
+        self.pie.training_pie(self.model, image_rgb, list_of_mask,
+                              transform_img=DEFAULT_TRANSFORM_IMAGENET,
+                              n_samples=args["pie_mc"], num_epochs=args["pie_epoch"])
 
         # 5-Calcul de la Shapley-values
         self.logging("EAC : Calcul des valeurs de Shapley ...")
-        args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
         shapley_values = self.calc_shapley(image_rgb, list_of_mask, args["shapley_mc"])
 
         # 6-Récupérer des concepts explicatifs.
@@ -586,6 +593,9 @@ class Model_EAC:
         image_masked_max = image_rgb * mask_max
         sorted_masks = masks[np.argsort(-shapley_values)]
         self.logging(f"EAC : Shapley, mask={idx_max}, Shapley={shapley_values[idx_max]}")
+
+        # 7-Calcul AUC
+        
 
         self.results["shapley_values"] = shapley_values
         self.results["image_masked_xai"] = image_masked_max
@@ -749,6 +759,12 @@ def run_process(args: dict | None = None) -> Model_EAC:
     args["sam_type"] = args.get("sam_type", DEFAULT_SAM_MODEL)
     # model [--model VIT_TYPE] = (str)
     args["model"] = args.get("model", DEFAULT_MODEL_TEST)
+    # shapley_mc [--shapley_mc] SHAPLEY_MC = (int)
+    args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
+    # pie_mc [--pie_mc] PIE_MC = (int)
+    args["pie_mc"] = args.get("pie_mc", DEFAULT_PIE_MC_SAMPLING)
+    # pie_epoch [--pie_epoch] PIE_EPOCH = (int)
+    args["pie_epoch"] = args.get("pie_epoch", DEFAULT_PIE_EPOCH)
 
     ###
     # Gestion du flux d'exécution
@@ -819,6 +835,13 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
                         help="[défaut=results] chemin du dossier de sortie")
     parser.add_argument("--input", type=str,
                         help="chemin de l'image d'entrée")
+
+    parser.add_argument("--shapley_mc", type=int, default=DEFAULT_SHAPLEY_MC_SAMPLING,
+                        help=f"[défaut={DEFAULT_SHAPLEY_MC_SAMPLING}] échantillonnage Monté-Carlo pour les valeurs de Shapley.")
+    parser.add_argument("--pie_mc", type=int, default=DEFAULT_PIE_MC_SAMPLING,
+                        help=f"[défaut={DEFAULT_PIE_MC_SAMPLING}] échantillonnage Monté-Carlo pour l'entraînement PIE.")
+    parser.add_argument("--pie_epoch", type=int, default=DEFAULT_PIE_EPOCH,
+                        help=f"[défaut={DEFAULT_PIE_EPOCH}] epoch pour l'entraînement PIE.")
 
     # 4 - Parser les arguments
     args = parser.parse_args(args_str)
