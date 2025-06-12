@@ -57,10 +57,11 @@ DEFAULT_LOG_FILENAME: Final[str] = "pipeline.log"
 DEFAULT_MODEL_FOLDER: Final[str] = "checkpoints"
 DEFAULT_SAM_MODEL: Final[str] = "vit_b"
 DEFAULT_MODEL_TEST: Final[str] = "resnet18"
+DEFAULT_SHAPLEY_MC_SAMPLING: Final[int] = 10_000
 
 DEVICE_GLOBAL: Final = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-IMG_RESIZE = [transforms.Resize(256),transforms.CenterCrop(224)]
+IMG_RESIZE = [transforms.Resize(256), transforms.CenterCrop(224)]
 IMG_CONVERT_TENSOR = [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True)]
 IMG_NORMALIZE = [transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
 
@@ -105,6 +106,16 @@ class Model_PIE(torch.nn.Module):
         if self.model_fc != None and with_fc:
             out = self.model_fc(out)
         return out
+
+    def predict_prob(self, x):
+        """Prédiction et donne les probas.
+        
+        :param x:   l'entrée
+        :return:    les probabilités de prédiction (de chaque classe)
+        """
+        out = self(x, with_fc=True)
+        prob = torch.nn.functional.softmax(out, dim=1)
+        return prob
 
     def logging(self, msg: str, level: int | str = logging.INFO, **kwargs):
         """Permet de logger.
@@ -559,13 +570,33 @@ class Model_EAC:
         self.pie.training_pie(self.model, image_rgb, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET, n_samples=10, num_epochs=10)
         
         # 5-Calcul de la Shapley-values
+        args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
+        shapley_values = self.calc_shapley(image_rgb, list_of_mask, args["shapley_mc"])
+        results["shapley_values"] = shapley_values
         self.logging("EAC : Calcul des valeurs de Shapley todo...")
         
         # 6-Récupérer des concepts explicatifs.
+        # prendre le max des shapley_values
         
         self.results["mask"] = ... # Mettre l'image masqué avec le masque explicatif
 
         self.logging(f"EAC : Fin exécution.")
+
+    def calc_shapley(self, image: npt.ndarray, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET,
+                     shapley_mc: int = DEFAULT_SHAPLEY_MC_SAMPLING)  -> npt.ndarray[float]:
+        """Calcule la valeur de Shapley pour tous les concepts.
+        
+        :param image:   l'image à expliquer
+        :param list_of_mask:    liste des masques
+        :param shapley_mc:      valeur de Monte-Carlo sampling
+        """
+        shapley_values = np.zero(len(list_of_mask), dtype=float)
+        pred = self.model(transform_img(image.unsqueeze()).unsqueeze(), dim=1)
+        image_class = int(torch.argmax(torch.nn.functional.softmax(pred)))
+        ...
+        
+        return shapley_values
+        
 
     def save(self, mode: Literal["all", "model", "results"] = "all",
              args: dict | None = None):
