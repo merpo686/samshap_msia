@@ -222,14 +222,14 @@ class Model_PIE(torch.nn.Module):
         return list_images, list_combinations, fused_mask
 
     @staticmethod
-    def _fuse_masks(list_of_mask, list_idx):
+    def _fuse_masks(list_of_mask, list_idx) -> npt.NDArray[bool]:
         """Fusionne plusieurs masque.
 
         :param list_of_mask:    liste des masques
         :param list_idx:        liste des indices des masques à fusionner
         :return:    le masque global fusionné des sous-masque donnés
         """
-        new_mask = np.zeros(list_of_mask[0].shape)
+        new_mask = np.zeros(list_of_mask[0].shape, dtype=bool)
         if not isinstance(list_idx, Iterable):
             list_idx = [list_idx]
 
@@ -280,6 +280,7 @@ class Model_EAC:
         self.device: torch.device = device
         self.model_fc = None
         self.model: torch.nn.Module = self.load_model_to_explain(model)
+        self.class_names: list[str] = torchvision.models.ResNet50_Weights.DEFAULT.meta["categories"]
 
         # Modèle EAC :
         self.sam: torch.nn.Module = None
@@ -543,6 +544,11 @@ class Model_EAC:
         """Exécute la tâche de l'EAC
 
         :param (dict) args: les arguments de la fonction
+        :return: les résultats sont enregistrés dans l'attributs self.results :
+            self.results["image_class_name"]
+            self.results["shapley_values"]
+            self.results["image_masked_xai"]
+            self.results["sorted_masks_xai"]
         """
         results: dict[str, Any] = {}
         self.logging(f"EAC : Début exécution.")
@@ -570,30 +576,56 @@ class Model_EAC:
         self.pie.training_pie(self.model, image_rgb, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET, n_samples=10, num_epochs=10)
 
         # 5-Calcul de la Shapley-values
+        self.logging("EAC : Calcul des valeurs de Shapley ...")
         args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
         shapley_values = self.calc_shapley(image_rgb, list_of_mask, args["shapley_mc"])
-        results["shapley_values"] = shapley_values
-        self.logging("EAC : Calcul des valeurs de Shapley todo...")
 
         # 6-Récupérer des concepts explicatifs.
-        # prendre le max des shapley_values
+        idx_max = np.argmax(shapley_values)
+        mask_max = list_of_mask[idx_max]
+        image_masked_max = image_rgb * mask_max
+        sorted_masks = masks[np.argsort(-shapley_values)]
+        self.logging(f"EAC : Shapley, mask={idx_max}, Shapley={shapley_values[idx_max]}")
 
-        self.results["mask"] = ...  # Mettre l'image masqué avec le masque explicatif
+        self.results["shapley_values"] = shapley_values
+        self.results["image_masked_xai"] = image_masked_max
+        self.results["sorted_masks_xai"] = sorted_masks
 
         self.logging(f"EAC : Fin exécution.")
 
-    def calc_shapley(self, image: npt.ndarray, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET,
-                     shapley_mc: int = DEFAULT_SHAPLEY_MC_SAMPLING) -> npt.ndarray[float]:
+    def calc_shapley(self, image: npt.NDArray, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET,
+                     shapley_mc: int = DEFAULT_SHAPLEY_MC_SAMPLING) -> npt.NDArray[float]:
         """Calcule la valeur de Shapley pour tous les concepts.
 
         :param image:   l'image à expliquer
         :param list_of_mask:    liste des masques
         :param shapley_mc:      valeur de Monte-Carlo sampling
+        :return:                les valeurs de Shapley pour chaque masque    
         """
-        shapley_values = np.zero(len(list_of_mask), dtype=float)
+        nb_mask = len(list_of_mask)
+        shapley_values = np.zero(nb_mask, dtype=float)
+
+        # 1-Prédiction de la classe de l'image
         pred = self.model(transform_img(image.unsqueeze()).unsqueeze(), dim=1)
         image_class = int(torch.argmax(torch.nn.functional.softmax(pred)))
-        ...
+        image_class_name = self.class_names[image_class]  # str nom de la classe
+        self.results["image_class_name"] = image_class_name
+
+        # 2-Calcul des Shapley valeurs
+        for i in range(nb_mask):
+            # 2.1-Monte-Carlo sampling des sous-ensemble de masque
+            _, idx_masks, fused_mask = self.pie._image_to_masks_mc(0, list_of_mask, n_mc_sample=shapley_mc)
+
+            # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
+            probas_concept = {True: 0., False: 0.}
+            for mask_onoff in probas_concept:
+                outs = self.pie(np.logical_or(fused_mask, list_of_mask[i] * mask_onoff))
+                probas = torch.nn.functional.softmax(outs, dim=1)
+                probas_concept[mask_onoff] = probas[:, image_class]
+
+            # 2.3-Calcul Shapley
+            tmp = probas_concept[True] - probas_concept[False]
+            shapley_values[i] = tmp.sum() / shapley_mc
 
         return shapley_values
 
