@@ -35,11 +35,13 @@ from itertools import combinations
 import cv2
 import numpy as np
 import numpy.typing as npt
+import sklearn
 import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
 from PIL import Image
 from pprint import pprint
+from tqdm import tqdm
 
 # /* Module interne */
 IA_AGENT_SAM_FOLDER = "SAM"
@@ -146,7 +148,8 @@ class Model_PIE(torch.nn.Module):
         :param num_epochs:      quantité d'epoch
         :param device:          le device d'exécution
         """
-        self.logging("PIE : Début entraînement.")
+        self.logging(f"PIE : Début entraînement {n_samples=}, {num_epochs=}.")
+        start_time = time.time()
         if transform_img is None:
             transform_img = DEFAULT_TRANSFORM_IMAGENET
 
@@ -163,11 +166,13 @@ class Model_PIE(torch.nn.Module):
         # idx_mask_combinations = [list(combinations(range(n_concept), r)) for r in range(1, n_concept+1)]
         # idx_mask_combinations = [list(sublist) for g in idx_mask_combinations for sublist in g]
         # Changement, nombre de sous-ensemble est l'arrangement donc n! et donc au-delà de 20 Python ne gère pas et MemoryError
-        list_images, list_combinations, _ = self._image_to_masks_mc(image, list_of_mask, n_samples)
+        self.logging(f"PIE : Création liste de sous-ensemble de masque via MC ({n_samples=})")
+        list_images_masked, list_idx_masks, list_fused_masks = self._image_to_masks_mc(image, list_of_mask, n_samples)
 
         # 2-Récupération des probabilités de prédiction du modèle
+        self.logging("PIE : Entraînement sur cette liste")
         target_probabilities = []
-        for masked_image in list_images:
+        for masked_image in list_images_masked:
             input_tensor = transform_img(masked_image).to(device)
             with torch.no_grad():
                 output = f_model(input_tensor.unsqueeze(0))
@@ -176,7 +181,7 @@ class Model_PIE(torch.nn.Module):
 
         # 3-Préparation des données d'entraînement
         input_data = []
-        for combo in list_combinations:
+        for combo in list_idx_masks:
             concept_vector = np.zeros(n_concept)
             concept_vector[combo] = 1
             input_data.append(concept_vector)
@@ -196,16 +201,21 @@ class Model_PIE(torch.nn.Module):
 
             print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
 
+        timing = f"--- {time.time() - start_time:.2f} seconds ---"
+        self.logging(f"PIE : Fin entraînement {timing}.")
+
     @staticmethod
     def _image_to_masks_mc(image: npt.NDArray, list_of_mask: list[npt.NDArray], n_mc_sample: int = 50):
         """Crée un échantillonnage Monté-Carlo d'image d'un sous-ensemble de masque.
 
         :param (np.array) image:    l'image à masquer
-        :param list(np.array(bool)) list_of_mask:    liste des masques
-        :param (int) n_mc_sample:   nombre d'image masqué
+        :param list(np.array(bool)) list_of_mask:    liste de masques booléens
+        :param (int) n_mc_sample:   nombre d’échantillons Monte-Carlo
+        :return:                 tuple (list_images_masked, list_idx_masks, list_fused_masks)
         """
-        list_images = []
-        list_combinations = []
+        list_images_masked = []
+        list_idx_masks = []
+        list_fused_masks = []
         num_masks = len(list_of_mask)
 
         for i in range(n_mc_sample):
@@ -216,12 +226,14 @@ class Model_PIE(torch.nn.Module):
             # 3-Fusionner les masques choisis
             fused_mask = Model_PIE._fuse_masks(list_of_mask, indices_to_fuse)
             # 4-Créer la nouvelle image
-            masked_image = image * np.stack([fused_mask] * 3, axis=-1)
+            # masked_image = image * np.stack([fused_mask] * 3, axis=-1)
+            masked_image = image * fused_mask[:, :, np.newaxis]
 
-            list_images.append(masked_image)
-            list_combinations.append(indices_to_fuse.tolist())
+            list_images_masked.append(masked_image)
+            list_idx_masks.append(indices_to_fuse.tolist())
+            list_fused_masks.append(fused_mask)
 
-        return list_images, list_combinations, fused_mask
+        return list_images_masked, list_idx_masks, list_fused_masks
 
     @staticmethod
     def _fuse_masks(list_of_mask, list_idx) -> npt.NDArray[bool]:
@@ -278,6 +290,7 @@ class Model_EAC:
         """
         self.results: dict = {}
         self.image: npt.NDArray = None
+        self.image_filename: str = self.name
         self.logger: logging.Logger = self._create_logger()
         self.device: torch.device = device
         self.model_fc = None
@@ -477,6 +490,7 @@ class Model_EAC:
         self.logging(f"Chargement img de {image_filename}")
         image_PIL = Image.open(image_filename)
         image_PIL = image_PIL.convert("RGB")
+        self.image_filename = image_filename
 
         if transform_PIL is not None:
             image_PIL = transform_PIL(image_PIL)
@@ -530,12 +544,14 @@ class Model_EAC:
         sam_result = None
         if mode == "mask":
             self.logging(f"SAM : exécution SAM en mode {mode} pour image={image_rgb.shape} ({image_rgb.dtype}):")
+            start_time = time.time()
             sam_args = args.get("SamAutomaticMaskGenerator", {})
             sam_args["model"] = self.sam
             # mask_generator = SamAutomaticMaskGenerator(self.sam)
             mask_generator = SamAutomaticMaskGenerator(**sam_args)
             sam_result = mask_generator.generate(image_rgb)
-            self.logging(f"SAM : nb_mask={len(sam_result)}")
+            timing = f"--- {time.time() - start_time:.2f} seconds ---"
+            self.logging(f"SAM : {timing} nb_mask={len(sam_result)}")
         else:
             self.logging(f"SAM : Exécution non implémenté {mode}", level=logging.WARNING)
 
@@ -560,6 +576,7 @@ class Model_EAC:
         args["shapley_mc"] = args.get("shapley_mc", DEFAULT_SHAPLEY_MC_SAMPLING)
         args["pie_mc"] = args.get("pie_mc", DEFAULT_PIE_MC_SAMPLING)
         args["pie_epoch"] = args.get("pie_epoch", DEFAULT_PIE_EPOCH)
+        args["transform_img"] = args.get("transform_img", DEFAULT_TRANSFORM_IMAGENET)
 
         # 1- Récupération image
         image_rgb = self.load_img(args.get("sam_img_in"), transform_PIL=None)
@@ -580,64 +597,135 @@ class Model_EAC:
         # 4-Entraînement PIE
         self.logging("EAC : Entraînement du PIE ...")
         self.pie.training_pie(self.model, image_rgb, list_of_mask,
-                              transform_img=DEFAULT_TRANSFORM_IMAGENET,
+                              transform_img=args["transform_img"],
                               n_samples=args["pie_mc"], num_epochs=args["pie_epoch"])
 
         # 5-Calcul de la Shapley-values
         self.logging("EAC : Calcul des valeurs de Shapley ...")
-        shapley_values = self.calc_shapley(image_rgb, list_of_mask, args["shapley_mc"])
+        start_time = time.time()
+        shapley_values = self.calc_shapley(image_rgb, list_of_mask,
+                                           shapley_mc=args["shapley_mc"],
+                                           transform_img=args["transform_img"])
 
         # 6-Récupérer des concepts explicatifs.
         idx_max = np.argmax(shapley_values)
         mask_max = list_of_mask[idx_max]
-        image_masked_max = image_rgb * mask_max
-        sorted_masks = masks[np.argsort(-shapley_values)]
-        self.logging(f"EAC : Shapley, mask={idx_max}, Shapley={shapley_values[idx_max]}")
+        image_masked_max = image_rgb * mask_max[:, :, np.newaxis]
+        sorted_masks = list_of_mask[np.argsort(-shapley_values)]
+        timing = f"--- {time.time() - start_time:.2f} seconds ---"
+        self.logging(f"EAC : Shapley, {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
 
         # 7-Calcul AUC
-        
+        self.logging("EAC : Calcul des AUC ...")
+        auc_deletion = self.calc_auc(image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=True)
+        auc_augmentation = self.calc_auc(image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=False)
+        self.logging(f"EAC : {auc_deletion=} , {auc_augmentation=}")
 
         self.results["shapley_values"] = shapley_values
         self.results["image_masked_xai"] = image_masked_max
         self.results["sorted_masks_xai"] = sorted_masks
+        self.results["auc_deletion"] = auc_deletion
+        self.results["auc_augmentation"] = auc_augmentation
 
         self.logging(f"EAC : Fin exécution.")
 
-    def calc_shapley(self, image: npt.NDArray, list_of_mask, transform_img=DEFAULT_TRANSFORM_IMAGENET,
+    def calc_shapley(self, image: npt.NDArray, list_of_mask: npt.NDArray[npt.NDArray[bool]],
+                     transform_img=DEFAULT_TRANSFORM_IMAGENET,
                      shapley_mc: int = DEFAULT_SHAPLEY_MC_SAMPLING) -> npt.NDArray[float]:
         """Calcule la valeur de Shapley pour tous les concepts.
 
-        :param image:   l'image à expliquer
-        :param list_of_mask:    liste des masques
+        :param image:   l'image à expliquer (H, W, C)
+        :param list_of_mask:    liste des masques (K, H, W)
         :param shapley_mc:      valeur de Monte-Carlo sampling
-        :return:                les valeurs de Shapley pour chaque masque    
+        :return:                les valeurs de Shapley pour chaque masque
         """
         nb_mask = len(list_of_mask)
-        shapley_values = np.zero(nb_mask, dtype=float)
+        shapley_values = np.zeros(nb_mask, dtype=float)
+        transform_img_pie = DEFAULT_TRANSFORM_BEGIN
 
         # 1-Prédiction de la classe de l'image
-        pred = self.model(transform_img(image.unsqueeze()).unsqueeze(), dim=1)
-        image_class = int(torch.argmax(torch.nn.functional.softmax(pred)))
-        image_class_name = self.class_names[image_class]  # str nom de la classe
-        self.results["image_class_name"] = image_class_name
+        model = self.model.eval().to(self.device)
+        input_tensor = transform_img(image).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            pred = model(input_tensor)
+        image_class = int(torch.argmax(torch.nn.functional.softmax(pred, dim=1)))
+        self.results["image_class_name"] = self.class_names[image_class]  # str nom de la classe
 
-        # 2-Calcul des Shapley valeurs
-        for i in range(nb_mask):
-            # 2.1-Monte-Carlo sampling des sous-ensemble de masque
-            _, idx_masks, fused_mask = self.pie._image_to_masks_mc(0, list_of_mask, n_mc_sample=shapley_mc)
+        # 2-Calcul des valeurs de Shapley pour chaque masque
+        for i in tqdm(range(nb_mask), desc="Calcul Shapley"):
+            # 2.1-échantillonnage par Monte-Carlo de masques
+            list_images_masked, _, _ = self.pie._image_to_masks_mc(
+                image, list_of_mask, n_mc_sample=shapley_mc)
 
             # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
-            probas_concept = {True: 0., False: 0.}
-            for mask_onoff in probas_concept:
-                outs = self.pie(np.logical_or(fused_mask, list_of_mask[i] * mask_onoff))
-                probas = torch.nn.functional.softmax(outs, dim=1)
-                probas_concept[mask_onoff] = probas[:, image_class]
+            model_pie = self.pie.eval().to(self.device)
+            image_transformed_pie = transform_img_pie(image)
+            probas_concept = {True: np.array(0.), False: np.array(0.)}
+            # for with_concept in probas_concept:
+                # Mettre à jour la liste des images déjà masqué avec ou non le concept à étudier
+                batch_image = [img.copy() for img in list_images_masked]
+                for img in batch_image:
+                    mask_3d = np.stack([list_of_mask[i]] * 3, axis=-1)  # (H, W, 3)
+                    img[mask_3d] = 0  # on remet les pixels à 0 pour le False (i.e., sans concept)
+                    if with_concept:
+                        img += image_transformed_pie * mask_3d  # on ajoute les pixels du concept original
+                with torch.no_grad():
+                    batch_image = torch.tensor(np.array(batch_image), dtype=torch.float32).to(self.device)
+                    outs = model_pie(batch_image)
+                    probas = torch.nn.functional.softmax(outs, dim=1)
+                    probas_concept[with_concept] = probas[:, image_class]  # (shapley_mc,)
 
-            # 2.3-Calcul Shapley
-            tmp = probas_concept[True] - probas_concept[False]
-            shapley_values[i] = tmp.sum() / shapley_mc
+            # 2.3-Calcul de Shapley moyenne
+            shapley_values[i] = (probas_concept[True] - probas_concept[False]).mean().item()
 
         return shapley_values
+
+    def calc_auc(self, image: npt.NDArray, sorted_masks: npt.NDArray[npt.NDArray[bool]],
+                 transform_img=DEFAULT_TRANSFORM_IMAGENET, is_deletion: bool = True) -> float:
+        """Calcul les AUC montant et descendant pour le modèle EAC.
+
+        :param image:           l'image à expliquer
+        :param sorted_masks:    l'ensemble des masques issue de SAM ordonnée par Shapley
+        :param transform_img:   la transformation à appliquer avant la prédiction par le modèle
+        :param is_deletion:     pour calculer l'AUC en mode délition ou augmmetation.
+        :return:    l'auc du mode souhaité
+        """
+        model = self.model.eval().to(self.device)
+        # 1- Initialisation avec image entière si mode délition, image noir sinon
+        imgs_masked = np.array(image * is_deletion)
+
+        # 2-Création de toutes les images masquées
+        for i in range(len(sorted_masks)):
+            current_img = imgs_masked[-1]
+            mask = sorted_masks[i] * (not is_deletion)
+            next_img = current_img[np.logical_not(mask)] + image[mask] * is_deletion
+            np.append(imgs_masked, next_img)
+        # Possible de retransformer en calcul dans un sens puis test si is_deletion et inversion de la liste ?? C'est quoi le plus simple ?
+
+        # 3-Prédiction de la classe de l'image
+        input_tensor = transform_img(image).unsqueeze(0).to(self.device)
+        pred = model(input_tensor)
+        proba = torch.nn.functional.softmax(pred, dim=1)
+        image_class = int(torch.argmax(proba))
+        image_class_proba = float(torch.max(proba))
+        image_class_name = self.class_names[image_class]  # str nom de la classe
+
+        # 4-Prédiction de chaque images masquées
+        input_tensor = transform_img(imgs_masked).unsqueeze(0).to(self.device)
+        outs = torch.nn.functional.softmax(model(input_tensor), dim=1)
+        pred_masks = outs[:, image_class]
+        pred_masks = pred_masks.cpu().numpy()
+
+        # 5-Préparation pour l'auc
+        pred_masks[pred_masks >= image_class_proba] = image_class_proba
+        y = pred_masks / image_class_proba
+        x = np.array(list(range(1, pred_masks.shape[0] + 1)))
+        x = x / pred_masks.shape[0] * 100  # normalisation et %
+
+        # 6-Calcul de l'AUC
+        auc = sklearn.metrics.auc(x, y)
+
+        return auc
 
     def save(self, mode: Literal["all", "model", "results"] = "all",
              args: dict | None = None):
@@ -677,25 +765,37 @@ class Model_EAC:
         if args is None:
             args = {}
 
-        filename = args.get("results_save_filename", "EAC")
+        filename_img = args.get("results_save_filename", self.image_filename)
         foldername = args.get("results_save_folder", DEFAULT_SAVE_FOLDER)
-        args["results_save_filename"] = filename
+        # args["results_save_filename"] = filename_img
         args["results_save_folder"] = foldername
         os.makedirs(foldername, exist_ok=True)
-        img_mask_filename = f"{filename}_mask.jpg"
-        img_bg_filename = f"{filename}_without_bg.jpg"
+        img_mask_filename = f"{filename_img}_mask.jpg"
+        img_bg_filename = "EAC_values.csv"
 
         img_to_save = []
-        if self.results.get("mask") is not None:
-            img_mask_PIL = Image.fromarray(self.results["mask"])
+        if self.results.get("image_masked_xai") is not None:
+            img_mask_PIL = Image.fromarray(self.results["image_masked_xai"])
             img_to_save.append((img_mask_PIL, img_mask_filename))
 
         # sauvegarde des images
         for img, filename in img_to_save:
             filepath = os.path.join(foldername, filename)
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            self.logger(f"Sauvegarde des résultats : {filepath}")
+            self.logging(f"Sauvegarde des résultats : {filepath}")
             img.save(filepath)
+
+        # sauvegarde de l'auc
+        if self.results.get("auc_deletion") is not None and self.results.get("auc_augmentation") is not None:
+            filepath = os.path.join(foldername, img_bg_filename)
+            first = not os.path.exists(filepath)
+            with open(filepath, "a") as f:
+                self.logging(f"Sauvegarde des AUC dans le : {filepath}")
+                if first:
+                    f.write("img;auc_deletion;auc_augmentation")
+                auc_deletion = self.results.get("auc_deletion")
+                auc_augmentation = self.results.get("auc_augmentation")
+                f.write(f"{filename_img};{auc_deletion};{auc_augmentation}")
 
 
 ###############################################################################
@@ -785,6 +885,14 @@ def run_process(args: dict | None = None) -> Model_EAC:
     model_xai.load_model_to_explain(f_model)
     model_xai.run(args)
 
+    # 3-Sauvegarde
+    modes: dict[str, str] = {"run": "results", "train": "model"}
+    mode: str = modes.get(args["task"], "results")
+
+    if is_saving:
+        model_xai.logging("Action : sauvegarde ...")
+        model_xai.save(mode, args)
+
     return model_xai
 
 
@@ -805,7 +913,7 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
         args_str = shlex.split(args_str)
 
     # 1 - Définition des listes de choix :
-    list_task_agentIA = ["run"]
+    list_task_agentIA = ["run", "train"]
     list_model_SAM = ["vit_h", "vit_l", "vit_b"]
 
     # 2 - Création du parseur à arguments:
