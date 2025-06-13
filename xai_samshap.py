@@ -47,7 +47,6 @@ from tqdm import tqdm
 IA_AGENT_SAM_FOLDER = "SAM"
 sys.path.append(IA_AGENT_SAM_FOLDER)
 from SAM.segment_anything import sam_model_registry, SamAutomaticMaskGenerator
-
 ###############################################################################
 # CONSTANTES :
 EXIT_OK: Final[int] = 0
@@ -66,12 +65,15 @@ DEFAULT_PIE_EPOCH: Final[int] = 10
 DEVICE_GLOBAL: Final = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 IMG_RESIZE = [transforms.Resize(256), transforms.CenterCrop(224)]
-IMG_CONVERT_TENSOR = [transforms.ToImage(), transforms.ToDtype(torch.float32, scale=True)]
-IMG_NORMALIZE = [transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
+IMG_CONVERT_TENSOR = [transforms.ToImage(
+), transforms.ToDtype(torch.float32, scale=True)]
+IMG_NORMALIZE = [transforms.Normalize(
+    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
 
 DEFAULT_TRANSFORM_BEGIN = transforms.Compose(IMG_RESIZE)
 DEFAULT_TRANSFORM_NORM = transforms.Compose(IMG_CONVERT_TENSOR + IMG_NORMALIZE)
-DEFAULT_TRANSFORM_IMAGENET = transforms.Compose(IMG_RESIZE + IMG_CONVERT_TENSOR + IMG_NORMALIZE)
+DEFAULT_TRANSFORM_IMAGENET = transforms.Compose(
+    IMG_RESIZE + IMG_CONVERT_TENSOR + IMG_NORMALIZE)
 
 
 ###############################################################################
@@ -128,7 +130,8 @@ class Model_PIE(torch.nn.Module):
         :param (int | str) level: [défaut INFO] niveau de log (cf. logging)
         """
         if self.logger is not None:
-            self.logger.logging(msg, level=level, caller_name=self.__class__.__name__, **kwargs)
+            self.logger.logging(
+                msg, level=level, caller_name=self.__class__.__name__, **kwargs)
         else:
             print(msg)
 
@@ -166,8 +169,10 @@ class Model_PIE(torch.nn.Module):
         # idx_mask_combinations = [list(combinations(range(n_concept), r)) for r in range(1, n_concept+1)]
         # idx_mask_combinations = [list(sublist) for g in idx_mask_combinations for sublist in g]
         # Changement, nombre de sous-ensemble est l'arrangement donc n! et donc au-delà de 20 Python ne gère pas et MemoryError
-        self.logging(f"PIE : Création liste de sous-ensemble de masque via MC ({n_samples=})")
-        list_images_masked, list_idx_masks, list_fused_masks = self._image_to_masks_mc(image, list_of_mask, n_samples)
+        self.logging(
+            f"PIE : Création liste de sous-ensemble de masque via MC ({n_samples=})")
+        list_images_masked, list_idx_masks, list_fused_masks = self._image_to_masks_mc(
+            image, list_of_mask, n_samples)
 
         # 2-Récupération des probabilités de prédiction du modèle
         self.logging("PIE : Entraînement sur cette liste")
@@ -187,7 +192,8 @@ class Model_PIE(torch.nn.Module):
             input_data.append(concept_vector)
 
         input_data = torch.tensor(np.array(input_data), dtype=torch.float32).to(device)
-        target_probabilities = torch.tensor(np.array(target_probabilities), dtype=torch.float32).to(device)
+        target_probabilities = torch.tensor(
+            np.array(target_probabilities), dtype=torch.float32).to(device)
 
         # 4-Entraînement du PIE
         criterion = torch.nn.CrossEntropyLoss()
@@ -437,7 +443,8 @@ class Model_EAC:
         url = self.SAM_URL.get(model_type, self.SAM_URL[DEFAULT_SAM_MODEL])
         # model = torch.utils.model_zoo.load_url(url, model_dir=model_dir, weights_only=True)
         try:
-            model = torch.hub.load_state_dict_from_url(url, model_dir=model_dir, weights_only=True)
+            model = torch.hub.load_state_dict_from_url(
+                url, model_dir=model_dir, weights_only=True)
         except:  # ancienne version de Torch
             model = torch.hub.load_state_dict_from_url(url, model_dir=model_dir)
         del model
@@ -484,7 +491,8 @@ class Model_EAC:
             image_filename = args["input"]
 
         if not os.path.exists(image_filename):
-            self.logging(f"Chemin image non trouvé {image_filename}!", level=logging.WARNING)
+            self.logging(
+                f"Chemin image non trouvé {image_filename}!", level=logging.WARNING)
             return None
 
         self.logging(f"Chargement img de {image_filename}")
@@ -543,7 +551,8 @@ class Model_EAC:
         # 2. Prédire avec SAM
         sam_result = None
         if mode == "mask":
-            self.logging(f"SAM : exécution SAM en mode {mode} pour image={image_rgb.shape} ({image_rgb.dtype}):")
+            self.logging(
+                f"SAM : exécution SAM en mode {mode} pour image={image_rgb.shape} ({image_rgb.dtype}):")
             start_time = time.time()
             sam_args = args.get("SamAutomaticMaskGenerator", {})
             sam_args["model"] = self.sam
@@ -553,7 +562,8 @@ class Model_EAC:
             timing = f"--- {time.time() - start_time:.2f} seconds ---"
             self.logging(f"SAM : {timing} nb_mask={len(sam_result)}")
         else:
-            self.logging(f"SAM : Exécution non implémenté {mode}", level=logging.WARNING)
+            self.logging(
+                f"SAM : Exécution non implémenté {mode}", level=logging.WARNING)
 
         # Rappel : nous on va vouloir avoir besoin de self.results["sam"][i]["segmentation"]
         self.results["sam"] = sam_result
@@ -586,7 +596,8 @@ class Model_EAC:
         # 2-Exécution de SAM
         self.logging(f"EAC : Exécution de SAM sur {image_rgb.shape} ...")
         self.run_sam(args)
-        list_of_mask = np.array([i['segmentation'].tolist() for i in self.results["sam"]])
+        list_of_mask = np.array([i['segmentation'].tolist()
+                                for i in self.results["sam"]])
 
         # 3-Création PIE
         pie_args = {}
@@ -613,12 +624,17 @@ class Model_EAC:
         image_masked_max = image_rgb * mask_max[:, :, np.newaxis]
         sorted_masks = list_of_mask[np.argsort(-shapley_values)]
         timing = f"--- {time.time() - start_time:.2f} seconds ---"
-        self.logging(f"EAC : Shapley, {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
-
+        self.logging(
+            f"EAC : Shapley, {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
+        # save masked image
+        # image_masked_save = transforms.ToPILImage()(image_masked_max)
+        # image_masked_save.save("image_masked_max.png")
         # 7-Calcul AUC
         self.logging("EAC : Calcul des AUC ...")
-        auc_deletion = self.calc_auc(image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=True)
-        auc_augmentation = self.calc_auc(image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=False)
+        auc_deletion = self.calc_auc(
+            image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=True)
+        auc_augmentation = self.calc_auc(
+            image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=False)
         self.logging(f"EAC : {auc_deletion=} , {auc_augmentation=}")
 
         self.results["shapley_values"] = shapley_values
@@ -649,34 +665,39 @@ class Model_EAC:
         with torch.no_grad():
             pred = model(input_tensor)
         image_class = int(torch.argmax(torch.nn.functional.softmax(pred, dim=1)))
-        self.results["image_class_name"] = self.class_names[image_class]  # str nom de la classe
+        # str nom de la classe
+        self.results["image_class_name"] = self.class_names[image_class]
 
         # 2-Calcul des valeurs de Shapley pour chaque masque
         for i in tqdm(range(nb_mask), desc="Calcul Shapley"):
             # 2.1-échantillonnage par Monte-Carlo de masques
-            list_images_masked, _, _ = self.pie._image_to_masks_mc(
+            _, list_idx_masks, _ = self.pie._image_to_masks_mc(
                 image, list_of_mask, n_mc_sample=shapley_mc)
-
+            batch_mask = []
+            for combo in list_idx_masks:
+                concept_vector = np.zeros(self.pie.linear[0].in_features)
+                concept_vector[combo] = 1
+                batch_mask.append(concept_vector)
             # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
             model_pie = self.pie.eval().to(self.device)
-            image_transformed_pie = transform_img_pie(image)
             probas_concept = {True: np.array(0.), False: np.array(0.)}
-            # for with_concept in probas_concept:
-                # Mettre à jour la liste des images déjà masqué avec ou non le concept à étudier
-                batch_image = [img.copy() for img in list_images_masked]
-                for img in batch_image:
-                    mask_3d = np.stack([list_of_mask[i]] * 3, axis=-1)  # (H, W, 3)
-                    img[mask_3d] = 0  # on remet les pixels à 0 pour le False (i.e., sans concept)
+            for with_concept in probas_concept:
+                # Mettre à jour la liste des masques avec ou non le concept à étudier
+                for mask in batch_mask:
+                    # on met le concept i à 0 pour le False 
+                    mask[i] = 0
                     if with_concept:
-                        img += image_transformed_pie * mask_3d  # on ajoute les pixels du concept original
+                        mask[i] = 1  # on met le concept i à 1 pour le True
                 with torch.no_grad():
-                    batch_image = torch.tensor(np.array(batch_image), dtype=torch.float32).to(self.device)
-                    outs = model_pie(batch_image)
+                    batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
+                    outs = model_pie(batch_mask)
                     probas = torch.nn.functional.softmax(outs, dim=1)
-                    probas_concept[with_concept] = probas[:, image_class]  # (shapley_mc,)
+                    probas_concept[with_concept] = probas[:,
+                                                          image_class]  # (shapley_mc,)
 
             # 2.3-Calcul de Shapley moyenne
-            shapley_values[i] = (probas_concept[True] - probas_concept[False]).mean().item()
+            shapley_values[i] = (probas_concept[True] -
+                                 probas_concept[False]).mean().item()
 
         return shapley_values
 
@@ -878,7 +899,8 @@ def run_process(args: dict | None = None) -> Model_EAC:
     model_xai = Model_EAC(sam_args=sam_args)
 
     if args["sam_img_in"] is None:
-        args["sam_img_in"] = model_xai.load_img(args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
+        args["sam_img_in"] = model_xai.load_img(
+            args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
 
     # 2- Suivant la tâche exécution de celle-ci
     f_model = torchvision.models.get_model(args["model"])
