@@ -29,13 +29,11 @@ import sys
 import time
 from collections.abc import Iterable
 from typing import Any, Final, Literal
-from itertools import combinations
 
 # /* Modules externes */
-import cv2
 import numpy as np
 import numpy.typing as npt
-import sklearn
+from sklearn.metrics import auc
 import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
@@ -136,7 +134,7 @@ class Model_PIE(torch.nn.Module):
             print(msg)
 
     def training_pie(self, f_model, image, list_of_mask, transform_img=None,
-                     n_samples: int = 10, num_epochs: int = 10, device=DEVICE_GLOBAL):
+                     n_samples: int = 10, num_epochs: int = 10, device=DEVICE_GLOBAL, label=None):
         """Entraîne ce PIE pour une image et model donnée.
 
         Génère un jeu d'image d'entraînement (n image composé de sous-set de mask),
@@ -181,7 +179,7 @@ class Model_PIE(torch.nn.Module):
             input_tensor = transform_img(masked_image).to(device)
             with torch.no_grad():
                 output = f_model(input_tensor.unsqueeze(0))
-                probabilities = torch.softmax(output, dim=1)
+                probabilities = torch.softmax(output, dim=1)[:, label]
                 target_probabilities.append(probabilities.squeeze().cpu().numpy())
 
         # 3-Préparation des données d'entraînement
@@ -199,7 +197,7 @@ class Model_PIE(torch.nn.Module):
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model_pie.parameters(), lr=0.001)
         for epoch in range(num_epochs):
-            outputs = model_pie(input_data)
+            outputs = model_pie(input_data)[:, label]  # Prédiction PIE pour la classe cible
             loss = criterion(outputs, target_probabilities)
             optimizer.zero_grad()
             loss.backward()
@@ -302,7 +300,8 @@ class Model_EAC:
         self.model_fc = None
         self.model: torch.nn.Module = self.load_model_to_explain(model)
         self.class_names: list[str] = torchvision.models.ResNet50_Weights.DEFAULT.meta["categories"]
-
+        self.label_predicted: str = None
+        
         # Modèle EAC :
         self.sam: torch.nn.Module = None
         self.pie: torch.nn.Module = None
@@ -605,22 +604,32 @@ class Model_EAC:
         pie_args["dim_fc"] = self.model_fc.in_features
         self.pie = self.load_pie(pie_args)
 
+        # 3.5-Prédiction de la classe de l'image
+        self.logging("EAC : Prédiction de la classe de l'image ...")
+        model = self.model.eval().to(self.device)
+        input_tensor = args["transform_img"](image_rgb).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            pred = model(input_tensor)
+        image_class = int(torch.argmax(torch.nn.functional.softmax(pred, dim=1)))
+        self.label_predicted = image_class
+        self.results["image_class_name"] = self.class_names[image_class]
+        self.logging(f"EAC : Classe de l'image={image_class} ({self.class_names[image_class]})")
+        
         # 4-Entraînement PIE
         self.logging("EAC : Entraînement du PIE ...")
         self.pie.training_pie(self.model, image_rgb, list_of_mask,
                               transform_img=args["transform_img"],
-                              n_samples=args["pie_mc"], num_epochs=args["pie_epoch"])
+                              n_samples=args["pie_mc"], num_epochs=args["pie_epoch"], label= image_class)
 
         # 5-Calcul de la Shapley-values
         self.logging("EAC : Calcul des valeurs de Shapley ...")
         start_time = time.time()
         shapley_values = self.calc_shapley(image_rgb, list_of_mask,
-                                           shapley_mc=args["shapley_mc"],
-                                           transform_img=args["transform_img"])
+                                           shapley_mc=args["shapley_mc"])
 
         # 6-Récupérer des concepts explicatifs.
         idx_max = np.argmax(shapley_values)
-        mask_max = list_of_mask[idx_max]
+        mask_max = list_of_mask[idx_max]  
         image_masked_max = image_rgb * mask_max[:, :, np.newaxis]
         sorted_masks = list_of_mask[np.argsort(-shapley_values)]
         timing = f"--- {time.time() - start_time:.2f} seconds ---"
@@ -629,6 +638,8 @@ class Model_EAC:
         # save masked image
         # image_masked_save = transforms.ToPILImage()(image_masked_max)
         # image_masked_save.save("image_masked_max.png")
+        # image_masked_save = transforms.ToPILImage()(image_rgb)
+        # image_masked_save.save("image_original.png")
         # 7-Calcul AUC
         self.logging("EAC : Calcul des AUC ...")
         auc_deletion = self.calc_auc(
@@ -646,27 +657,17 @@ class Model_EAC:
         self.logging(f"EAC : Fin exécution.")
 
     def calc_shapley(self, image: npt.NDArray, list_of_mask: npt.NDArray[npt.NDArray[bool]],
-                     transform_img=DEFAULT_TRANSFORM_IMAGENET,
                      shapley_mc: int = DEFAULT_SHAPLEY_MC_SAMPLING) -> npt.NDArray[float]:
         """Calcule la valeur de Shapley pour tous les concepts.
 
         :param image:   l'image à expliquer (H, W, C)
         :param list_of_mask:    liste des masques (K, H, W)
         :param shapley_mc:      valeur de Monte-Carlo sampling
+        :param label:    la classe de l'image à expliquer (si None, on utilise la prédiction du modèle)
         :return:                les valeurs de Shapley pour chaque masque
         """
         nb_mask = len(list_of_mask)
         shapley_values = np.zeros(nb_mask, dtype=float)
-        transform_img_pie = DEFAULT_TRANSFORM_BEGIN
-
-        # 1-Prédiction de la classe de l'image
-        model = self.model.eval().to(self.device)
-        input_tensor = transform_img(image).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            pred = model(input_tensor)
-        image_class = int(torch.argmax(torch.nn.functional.softmax(pred, dim=1)))
-        # str nom de la classe
-        self.results["image_class_name"] = self.class_names[image_class]
 
         # 2-Calcul des valeurs de Shapley pour chaque masque
         for i in tqdm(range(nb_mask), desc="Calcul Shapley"):
@@ -693,7 +694,7 @@ class Model_EAC:
                     outs = model_pie(batch_mask)
                     probas = torch.nn.functional.softmax(outs, dim=1)
                     probas_concept[with_concept] = probas[:,
-                                                          image_class]  # (shapley_mc,)
+                                                          self.label_predicted]  # (shapley_mc,)
 
             # 2.3-Calcul de Shapley moyenne
             shapley_values[i] = (probas_concept[True] -
@@ -712,41 +713,43 @@ class Model_EAC:
         :return:    l'auc du mode souhaité
         """
         model = self.model.eval().to(self.device)
-        # 1- Initialisation avec image entière si mode délition, image noir sinon
-        imgs_masked = np.array(image * is_deletion)
-
-        # 2-Création de toutes les images masquées
+        # 1- Initialisation avec image entière si mode délition, image noire sinon
+        current_mask = np.zeros(image.shape[:2], dtype=bool) if is_deletion else np.ones(image.shape[:2], dtype=bool)
+        x, imgs_masked = [], []
+        next_img = image * (~current_mask)[:, :, np.newaxis]
+        imgs_masked.append(next_img)
+        x.append(100 * np.sum(current_mask) / current_mask.size)
         for i in range(len(sorted_masks)):
-            current_img = imgs_masked[-1]
-            mask = sorted_masks[i] * (not is_deletion)
-            next_img = current_img[np.logical_not(mask)] + image[mask] * is_deletion
-            np.append(imgs_masked, next_img)
-        # Possible de retransformer en calcul dans un sens puis test si is_deletion et inversion de la liste ?? C'est quoi le plus simple ?
+            if is_deletion:
+                current_mask = np.logical_or(current_mask, sorted_masks[i])
+            else:
+                current_mask = np.logical_and(current_mask, np.logical_not(sorted_masks[i]))
+            next_img = image * (~current_mask)[:, :, np.newaxis]
+            imgs_masked.append(next_img)
+            x.append(100 * np.sum(current_mask) / current_mask.size)
+        imgs_masked = np.stack(imgs_masked)
+        with torch.no_grad():
+            # 3-Prédiction de la classe de l'image
+            input_tensor = transform_img(image).unsqueeze(0).to(self.device)
+            pred = model(input_tensor)
+            proba = torch.nn.functional.softmax(pred, dim=1)
+            image_class = int(torch.argmax(proba))
+            image_class_proba = float(torch.max(proba))
+            image_class_name = self.class_names[image_class]  # str nom de la classe
 
-        # 3-Prédiction de la classe de l'image
-        input_tensor = transform_img(image).unsqueeze(0).to(self.device)
-        pred = model(input_tensor)
-        proba = torch.nn.functional.softmax(pred, dim=1)
-        image_class = int(torch.argmax(proba))
-        image_class_proba = float(torch.max(proba))
-        image_class_name = self.class_names[image_class]  # str nom de la classe
-
-        # 4-Prédiction de chaque images masquées
-        input_tensor = transform_img(imgs_masked).unsqueeze(0).to(self.device)
-        outs = torch.nn.functional.softmax(model(input_tensor), dim=1)
-        pred_masks = outs[:, image_class]
-        pred_masks = pred_masks.cpu().numpy()
+            # 4-Prédiction de chaque images masquées
+            input_tensor = torch.stack([transform_img(img) for img in imgs_masked]).to(self.device)
+            outs = torch.nn.functional.softmax(model(input_tensor), dim=1)
+            pred_masks = outs[:, image_class].cpu().numpy()
 
         # 5-Préparation pour l'auc
         pred_masks[pred_masks >= image_class_proba] = image_class_proba
         y = pred_masks / image_class_proba
-        x = np.array(list(range(1, pred_masks.shape[0] + 1)))
-        x = x / pred_masks.shape[0] * 100  # normalisation et %
 
         # 6-Calcul de l'AUC
-        auc = sklearn.metrics.auc(x, y)
+        auc_value = auc(x, y)
 
-        return auc
+        return auc_value
 
     def save(self, mode: Literal["all", "model", "results"] = "all",
              args: dict | None = None):
