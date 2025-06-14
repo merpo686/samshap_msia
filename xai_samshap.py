@@ -174,7 +174,7 @@ class Model_PIE(torch.nn.Module):
             image, list_of_mask, n_samples)
 
         # 2-Récupération des probabilités de prédiction du modèle
-        self.logging("PIE : Entraînement sur cette liste")
+        self.logging("PIE : Prédiction du modèle f_model sur cette liste")
         target_probabilities = []
         for masked_image in list_images_masked:
             input_tensor = transform_img(masked_image).to(device)
@@ -195,6 +195,7 @@ class Model_PIE(torch.nn.Module):
             np.array(target_probabilities), dtype=torch.float32).to(device)
 
         # 4-Entraînement du PIE
+        self.logging("PIE : Entraînement sur cette liste")
         criterion = torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.SGD(model_pie.parameters(), lr=0.008, momentum=0.9)
         for epoch in range(num_epochs):
@@ -290,13 +291,14 @@ class Model_EAC:
 
     def __init__(self, model: torch.nn.Module | None = None, image: Any | None = None,
                  sam_args: dict | None = None, pie_args: dict | None = None,
+                 log_filepath: str | None = None,
                  device=DEVICE_GLOBAL):
         """Initialise la classe.
         """
         self.results: dict = {}
         self.image: npt.NDArray = None
         self.image_filename: str = self.name
-        self.logger: logging.Logger = self._create_logger()
+        self.logger: logging.Logger = self._create_logger(log_filepath)
         self.device: torch.device = device
         self.model_fc = None
         self.model: torch.nn.Module = self.load_model_to_explain(model)
@@ -495,7 +497,7 @@ class Model_EAC:
                 f"Chemin image non trouvé {image_filename}!", level=logging.WARNING)
             return None
 
-        self.logging(f"Chargement img de {image_filename}")
+        self.logging(f"Chargement image de {image_filename}")
         image_PIL = Image.open(image_filename)
         image_PIL = image_PIL.convert("RGB")
         self.image_filename = image_filename
@@ -613,7 +615,7 @@ class Model_EAC:
         image_class = int(torch.argmax(torch.nn.functional.softmax(pred, dim=1)))
         self.label_predicted = image_class
         self.results["image_class_name"] = self.class_names[image_class]
-        self.logging(f"EAC : Classe de l'image={image_class} ({self.class_names[image_class]})")
+        self.logging(f"EAC : => classe de l'image={image_class} ({self.class_names[image_class]})")
         
         # 4-Entraînement PIE
         self.logging("EAC : Entraînement du PIE ...")
@@ -634,7 +636,7 @@ class Model_EAC:
         sorted_masks = list_of_mask[np.argsort(-shapley_values)]
         timing = f"--- {time.time() - start_time:.2f} seconds ---"
         self.logging(
-            f"EAC : Shapley, {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
+            f"EAC : => {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
         # save masked image
         # image_masked_save = transforms.ToPILImage()(image_masked_max)
         # image_masked_save.save("image_masked_max.png")
@@ -646,7 +648,7 @@ class Model_EAC:
             image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=True)
         auc_augmentation = self.calc_auc(
             image_rgb, sorted_masks, transform_img=args["transform_img"], is_deletion=False)
-        self.logging(f"EAC : {auc_deletion=} , {auc_augmentation=}")
+        self.logging(f"EAC : => {auc_deletion=} , {auc_augmentation=}")
 
         self.results["shapley_values"] = shapley_values
         self.results["image_masked_xai"] = image_masked_max
@@ -845,7 +847,7 @@ def run_process(args: dict | None = None) -> Model_EAC:
     # savefile [--savefile [FILENAME]] = défaut stdout, None si pas FILENAME
     args["savefile"] = args.get("savefile", sys.stdout)
     # log_filepath = (str) None si pas de log en fichier
-    filename = args["logfile"] if args["logfile"] is not None else f"{DEFAULT_LOG_FILENAME}.log"
+    filename = args["logfile"] if args["logfile"] is not None else DEFAULT_LOG_FILENAME
     timestamp = str(int(time.time()))
     foldername = os.path.join(DEFAULT_LOG_FOLDER, timestamp)
     if args["nolog"] or not isinstance(filename, str):
@@ -864,7 +866,8 @@ def run_process(args: dict | None = None) -> Model_EAC:
     args["checkpoint"] = args.get("checkpoint", DEFAULT_MODEL_FOLDER)
 
     is_saving = False
-    args["results_save_folder"] = args.get("results_save_folder", DEFAULT_SAVE_FOLDER)
+    foldername = os.path.join(DEFAULT_SAVE_FOLDER, timestamp)
+    args["results_save_folder"] = args.get("results_save_folder", foldername)
     args["model_save_folder"] = args.get("model_save_folder", DEFAULT_SAVE_FOLDER)
     args["save_filepath"] = None
     if args["savefile"] is None or isinstance(args["savefile"], str):  # SAVE :
@@ -899,22 +902,23 @@ def run_process(args: dict | None = None) -> Model_EAC:
     sam_args = {}
     sam_args["sam_type"] = args["sam_type"]
     sam_args["model_dir"] = args["checkpoint"]
-    model_xai = Model_EAC(sam_args=sam_args)
+    model_xai = Model_EAC(sam_args=sam_args, log_filepath=args["log_filepath"])
 
     # 2- Chargement des images à tester
     list_img_test = []
     if (args["task"] == "run" and args["sam_img_in"] is None) or (args["task"] == "test" and os.path.isfile(args.get("input",""))):
         # Charge d'un image seule
-        args["sam_img_in"] = model_xai.load_img(
-            args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
-        list_img_test.append(args["sam_img_in"])
+        # args["sam_img_in"] = model_xai.load_img(
+            # args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
+        # list_img_test.append(args["sam_img_in"])
+        list_img_test.extend(args.get("input"))
 
     if args["task"] == "test" and os.path.isdir(args.get("input","")):
         types = ('*.png', '*.jpg', '*.jpeg')
         for files in types:
             list_img_test.extend(glob.glob(os.path.join(args.get("input"), files)))
 
-    model_xai.logging(f" {len(list_img_test)} image chargées.")
+    model_xai.logging(f"Chargement de {len(list_img_test)} images.", caller_name="run_process")
 
     # 3- Suivant la tâche exécution de celle-ci
     modes: dict[str, str] = {"run": "results", "train": "model", "test": "results"}
@@ -929,7 +933,7 @@ def run_process(args: dict | None = None) -> Model_EAC:
 
         # 3-Sauvegarde
         if is_saving:
-            model_xai.logging("Action : sauvegarde ...")
+            model_xai.logging("Action : sauvegarde ...", caller_name="run_process")
             model_xai.save(mode, args)
 
     return model_xai
