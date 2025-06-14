@@ -53,16 +53,16 @@ options:
 
 Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda
 ```
-- **Exemple exécution image :**
+- **Exemple d'exécution EAC sur une image :**
 
 `python xai_samshap.py --sam_type vit_b --model=resnet18 -input=dog.jpeg`
 
-- **Exemple exécution de tests et sauvegarde des résultats**
+- **Exemple de test sur plusieurs images et sauvegarde des résultats**
 
 `python xai_samshap.py --task=test --sam_type vit_b --model=resnet18 --input=data\imagenet_subsample --device=cuda --logfile --savefile`
 
-  - les logs seront sauvegarder dans _'logs\<timestamp>\pipeline.log'_
-  - les résultats dans _'results\<timestamp>\'_
+  - les logs seront sauvegardés dans _'logs\<timestamp>\pipeline.log'_
+  - les résultats seront sauvegardés dans _'results\<timestamp>\'_
     - _<input_test_folder>/<img_name>\_mask.jpg_ pour les masques d'explication
     - _EAC_values.csv_ pour les valeurs des AUC
 
@@ -73,7 +73,7 @@ Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resne
 ```python
 import xai_samshap
 
-args = {}
+args = vars(xai_samshap.parse_args())  # args par défaut
 args["input"] = ...
 model_eac = xai_samshap.run_process(args)
 model_eac.results
@@ -86,5 +86,5 @@ model_eac.results
 | Name               | GitHub Profile                              |
 |--------------------|---------------------------------------------|
 | **Nicolas ALLÈGRE**| [nicolas-allegre](https://github.com/nicolas-allegre) |
-| **Louis Borreill**   | [...](https://github.com/...) |
+| **Louis Borreill**   | [LouisBorr](https://github.com/LouisBorr) |
 | **Merlin Poitou**   | [merpo686](https://github.com/merpo686) |
