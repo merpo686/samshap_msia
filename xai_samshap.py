@@ -58,7 +58,7 @@ DEFAULT_SAM_MODEL: Final[str] = "vit_b"
 DEFAULT_MODEL_TEST: Final[str] = "resnet18"
 DEFAULT_SHAPLEY_MC_SAMPLING: Final[int] = 10_000
 DEFAULT_PIE_MC_SAMPLING: Final[int] = 2_500
-DEFAULT_PIE_EPOCH: Final[int] = 10
+DEFAULT_PIE_EPOCH: Final[int] = 50
 
 DEVICE_GLOBAL: Final = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -194,8 +194,8 @@ class Model_PIE(torch.nn.Module):
             np.array(target_probabilities), dtype=torch.float32).to(device)
 
         # 4-Entraînement du PIE
-        criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model_pie.parameters(), lr=0.001)
+        criterion = torch.nn.BCEWithLogitsLoss()
+        optimizer = torch.optim.SGD(model_pie.parameters(), lr=0.008, momentum=0.9)
         for epoch in range(num_epochs):
             outputs = model_pie(input_data)[:, label]  # Prédiction PIE pour la classe cible
             loss = criterion(outputs, target_probabilities)
@@ -546,7 +546,6 @@ class Model_EAC:
 
         # 1- Récupération image
         image_rgb = self.load_img(args.get("sam_img_in"), transform_PIL=None)
-
         # 2. Prédire avec SAM
         sam_result = None
         if mode == "mask":
