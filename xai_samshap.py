@@ -818,10 +818,10 @@ class Model_EAC:
             with open(filepath, "a") as f:
                 self.logging(f"Sauvegarde des AUC dans le : {filepath}")
                 if first:
-                    f.write("img;auc_deletion;auc_augmentation")
+                    f.write("img;auc_deletion;auc_augmentation\n")
                 auc_deletion = self.results.get("auc_deletion")
                 auc_augmentation = self.results.get("auc_augmentation")
-                f.write(f"{filename_img};{auc_deletion};{auc_augmentation}")
+                f.write(f"{filename_img};{auc_deletion};{auc_augmentation}\n")
 
 
 ###############################################################################
