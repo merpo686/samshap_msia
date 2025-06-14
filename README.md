@@ -24,7 +24,7 @@ sed -i \"s/torch.load(f)/torch.load(f, weights_only=True)/g\" SAM/segment_anythi
 #### **Usage en ligne de commande :**
 ```bash
 python xai_samshap.py -h
-usage: EAC [-h] [--task {run}] [--logfile [LOGFILE]] [--savefile [SAVEFILE]] [--nolog] [--checkpoint CHECKPOINT]
+usage: EAC [-h] [--task {run,test}] [--logfile [LOGFILE]] [--savefile [SAVEFILE]] [--nolog] [--checkpoint CHECKPOINT]
            [--device DEVICE] [--sam_type {vit_h,vit_l,vit_b}] [--model MODEL] [--output [OUTPUT]] [--input INPUT]
            [--shapley_mc SHAPLEY_MC] [--pie_mc PIE_MC] [--pie_epoch PIE_EPOCH]
 
@@ -32,7 +32,7 @@ Lance la XAI avec le EAC.
 
 options:
   -h, --help            show this help message and exit
-  --task {run}          [défaut=run] tâche à accomplir
+  --task {run,test}     [défaut=run] tâche à accomplir
   --logfile [LOGFILE]   sortie du programme
   --savefile [SAVEFILE]
                         spécifie s'il faut sauvegarder.
@@ -44,20 +44,23 @@ options:
                         [défaut=vit_h] modèle VIT de SAM [vit_h, vit_l, vit_b]
   --model MODEL         [Défaut=resnet18] modèle à tester (de torchvision)
   --output [OUTPUT]     [défaut=results] chemin du dossier de sortie
-  --input INPUT         chemin de l'image d'entrée
+  --input INPUT         chemin de l'image d'entrée (ou dossier de test en mode test)
   --shapley_mc SHAPLEY_MC
-                        [défault=10000] échantillonnage Monté-Carlo pour les valeurs de Shapley.
-  --pie_mc PIE_MC       [défault=2500] échantillonnage Monté-Carlo pour l'entraînement PIE.
+                        [défaut=10000] échantillonnage Monté-Carlo pour les valeurs de Shapley.
+  --pie_mc PIE_MC       [défaut=2500] échantillonnage Monté-Carlo pour l'entraînement PIE.
   --pie_epoch PIE_EPOCH
-                        [défault=10] epoch pour l'entraînement PIE.
+                        [défaut=50] epoch pour l'entraînement PIE.
 
 Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda
 ```
-- Exemple exécution image :
-`python xai_samshap.py --sam_type vit_b --model=resnet18 -input=dog.jpeg --device=cuda`
+- **Exemple exécution image :**
 
-- Exemple exécution de tests et sauvegarde des résultats
+`python xai_samshap.py --sam_type vit_b --model=resnet18 -input=dog.jpeg`
+
+- **Exemple exécution de tests et sauvegarde des résultats**
+
 `python xai_samshap.py --task=test --sam_type vit_b --model=resnet18 --input=data\imagenet_subsample --device=cuda --logfile --savefile`
+
   - les logs seront sauvegarder dans _'logs\<timestamp>\pipeline.log'_
   - les résultats dans _'results\<timestamp>\'_
     - _<input_test_folder>/<img_name>\_mask.jpg_ pour les masques d'explication
