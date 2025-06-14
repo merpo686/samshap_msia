@@ -16,7 +16,7 @@ L'ensemble de ce dépôt dépeint l'implémentation de EAC (Explain Any Concept)
 git clone https://github.com/merpo686/samshap_msia.git
 cd samshap_msia
 git clone https://github.com/facebookresearch/segment-anything.git SAM
-sed -i \"s/torch.load(f)/torch.load(f, weights_only=True)/g\" SAM/segment_anything/build_sam.py
+sed -i "s/torch.load(f)/torch.load(f, weights_only=True)/g" SAM/segment_anything/build_sam.py
 ```
 
 ### **Exécution :**

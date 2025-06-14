@@ -429,16 +429,16 @@ class Model_EAC:
         afin d'éviter d'avoir les poids 2 fois en mémoire.
 
         :param (dict) sam_args:     paramètres de chargement de SAM
-            sam_args["model_type"]    le type de model SAM
+            sam_args["sam_type"]    le type de model SAM
             sam_args["model_dir"]     le dossier où sont les poids
               si le dossier ou les poids n'existent pas, ils sont téléchargés dedans
         :return (segment_anything.modeling.sam.Sam):    le modèle SAM demandé
         """
         if sam_args is None:
             sam_args = {}
-        sam_args["model_type"] = sam_args.get("model_type", DEFAULT_SAM_MODEL)
+        sam_args["sam_type"] = sam_args.get("sam_type", DEFAULT_SAM_MODEL)
         sam_args["model_dir"] = sam_args.get("model_dir", DEFAULT_MODEL_FOLDER)
-        model_type = sam_args["model_type"]
+        model_type = sam_args["sam_type"]
         model_dir = sam_args["model_dir"]
 
         # 1-Vérification présence des poids sinon téléchargement
@@ -681,18 +681,20 @@ class Model_EAC:
                 concept_vector = np.zeros(self.pie.linear[0].in_features)
                 concept_vector[combo] = 1
                 batch_mask.append(concept_vector)
+
             # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
+            with torch.no_grad():
+                batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
             model_pie = self.pie.eval().to(self.device)
             probas_concept = {True: np.array(0.), False: np.array(0.)}
             for with_concept in probas_concept:
                 # Mettre à jour la liste des masques avec ou non le concept à étudier
                 for mask in batch_mask:
-                    # on met le concept i à 0 pour le False 
+                    # on met le concept i à 0 pour le False
                     mask[i] = 0
                     if with_concept:
                         mask[i] = 1  # on met le concept i à 1 pour le True
                 with torch.no_grad():
-                    batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
                     outs = model_pie(batch_mask)
                     probas = torch.nn.functional.softmax(outs, dim=1)
                     probas_concept[with_concept] = probas[:,
@@ -907,11 +909,7 @@ def run_process(args: dict | None = None) -> Model_EAC:
     # 2- Chargement des images à tester
     list_img_test = []
     if (args["task"] == "run" and args["sam_img_in"] is None) or (args["task"] == "test" and os.path.isfile(args.get("input",""))):
-        # Charge d'un image seule
-        # args["sam_img_in"] = model_xai.load_img(
-            # args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
-        # list_img_test.append(args["sam_img_in"])
-        list_img_test.extend(args.get("input"))
+        list_img_test.append(args.get("input"))
 
     if args["task"] == "test" and os.path.isdir(args.get("input","")):
         types = ('*.png', '*.jpg', '*.jpeg')
@@ -975,15 +973,15 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
     parser.add_argument("--nolog", action='store_true',
                         help="désactive les log")
     parser.add_argument("--checkpoint", type=str, default=DEFAULT_MODEL_FOLDER,
-                        help="[défaut=checkpoints] dossier où sont les poids des modèles.")
+                        help=f"[défaut={DEFAULT_MODEL_FOLDER}] dossier où sont les poids des modèles.")
     parser.add_argument("--device", type=str, default="cpu",
                         help="[défaut=cpu] device où charger le modèle [auto, cpu, cuda, torch_directml]")
     parser.add_argument("--sam_type", type=str, choices=list_model_SAM, default=DEFAULT_SAM_MODEL,
-                        help="[défaut=vit_h] modèle VIT de SAM [vit_h, vit_l, vit_b]")
+                        help=f"[défaut={DEFAULT_SAM_MODEL}] modèle VIT de SAM [vit_h, vit_l, vit_b]")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_TEST,
-                        help="[Défaut=resnet18] modèle à tester (de torchvision)")
+                        help=f"[Défaut={DEFAULT_MODEL_TEST}] modèle à tester (de torchvision)")
     parser.add_argument("--output", type=str, nargs='?', default=DEFAULT_SAVE_FOLDER,
-                        help="[défaut=results] chemin du dossier de sortie")
+                        help=f"[défaut={DEFAULT_SAVE_FOLDER}] chemin du dossier de sortie")
     parser.add_argument("--input", type=str,
                         help="chemin de l'image d'entrée (ou dossier de test en mode test)")
 
