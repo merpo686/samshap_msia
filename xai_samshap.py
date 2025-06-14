@@ -22,6 +22,7 @@ __version__ = '0.2'
 # IMPORTS :
 # /* Modules standards */
 import argparse
+import glob
 import logging
 import os
 import shlex
@@ -900,22 +901,36 @@ def run_process(args: dict | None = None) -> Model_EAC:
     sam_args["model_dir"] = args["checkpoint"]
     model_xai = Model_EAC(sam_args=sam_args)
 
-    if args["sam_img_in"] is None:
+    # 2- Chargement des images à tester
+    list_img_test = []
+    if (args["task"] == "run" and args["sam_img_in"] is None) or (args["task"] == "test" and os.path.isfile(args.get("input",""))):
+        # Charge d'un image seule
         args["sam_img_in"] = model_xai.load_img(
             args.get("input"), transform_PIL=DEFAULT_TRANSFORM_BEGIN)
+        list_img_test.append(args["sam_img_in"])
 
-    # 2- Suivant la tâche exécution de celle-ci
-    f_model = torchvision.models.get_model(args["model"])
-    model_xai.load_model_to_explain(f_model)
-    model_xai.run(args)
+    if args["task"] == "test" and os.path.isdir(args.get("input","")):
+        types = ('*.png', '*.jpg', '*.jpeg')
+        for files in types:
+            list_img_test.extend(glob.glob(os.path.join(args.get("input"), files)))
 
-    # 3-Sauvegarde
-    modes: dict[str, str] = {"run": "results", "train": "model"}
+    model_xai.logging(f" {len(list_img_test)} image chargées.")
+
+    # 3- Suivant la tâche exécution de celle-ci
+    modes: dict[str, str] = {"run": "results", "train": "model", "test": "results"}
     mode: str = modes.get(args["task"], "results")
 
-    if is_saving:
-        model_xai.logging("Action : sauvegarde ...")
-        model_xai.save(mode, args)
+    f_model = torchvision.models.get_model(args["model"])
+    model_xai.load_model_to_explain(f_model)
+    for img in list_img_test:
+        args["sam_img_in"] = model_xai.load_img(
+            img, transform_PIL=DEFAULT_TRANSFORM_BEGIN)
+        model_xai.run(args)
+
+        # 3-Sauvegarde
+        if is_saving:
+            model_xai.logging("Action : sauvegarde ...")
+            model_xai.save(mode, args)
 
     return model_xai
 
@@ -937,7 +952,7 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
         args_str = shlex.split(args_str)
 
     # 1 - Définition des listes de choix :
-    list_task_agentIA = ["run", "train"]
+    list_task_agentIA = ["run", "test"]
     list_model_SAM = ["vit_h", "vit_l", "vit_b"]
 
     # 2 - Création du parseur à arguments:
@@ -966,7 +981,7 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=str, nargs='?', default=DEFAULT_SAVE_FOLDER,
                         help="[défaut=results] chemin du dossier de sortie")
     parser.add_argument("--input", type=str,
-                        help="chemin de l'image d'entrée")
+                        help="chemin de l'image d'entrée (ou dossier de test en mode test)")
 
     parser.add_argument("--shapley_mc", type=int, default=DEFAULT_SHAPLEY_MC_SAMPLING,
                         help=f"[défaut={DEFAULT_SHAPLEY_MC_SAMPLING}] échantillonnage Monté-Carlo pour les valeurs de Shapley.")
