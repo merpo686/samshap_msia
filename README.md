@@ -53,6 +53,16 @@ options:
 
 Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda
 ```
+- Exemple exécution image :
+`python xai_samshap.py --sam_type vit_b --model=resnet18 -input=dog.jpeg --device=cuda`
+
+- Exemple exécution de tests et sauvegarde des résultats
+`python xai_samshap.py --task=test --sam_type vit_b --model=resnet18 --input=data\imagenet_subsample --device=cuda --logfile --savefile`
+  - les logs seront sauvegarder dans _'logs\<timestamp>\pipeline.log'_
+  - les résultats dans _'results\<timestamp>\'_
+    - _<input_test_folder>/<img_name>\_mask.jpg_ pour les masques d'explication
+    - _EAC_values.csv_ pour les valeurs des AUC
+
 
 #### **Usage Python :**
 
