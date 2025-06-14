@@ -912,7 +912,7 @@ def run_process(args: dict | None = None) -> Model_EAC:
         list_img_test.append(args.get("input"))
 
     if args["task"] == "test" and os.path.isdir(args.get("input","")):
-        types = ('*.png', '*.jpg', '*.jpeg')
+        types = ('*.png', '*.jpg', '*.jpeg',  '*.JPEG')
         for files in types:
             list_img_test.extend(glob.glob(os.path.join(args.get("input"), files)))
 
