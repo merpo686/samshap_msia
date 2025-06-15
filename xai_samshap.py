@@ -875,7 +875,7 @@ def run_process(args: dict | None = None) -> Model_EAC:
     modes: dict[str, str] = {"run": "results", "train": "model", "test": "results"}
     mode: str = modes.get(args["task"], "results")
 
-    f_model = torchvision.models.get_model(args["model"])
+    f_model = torchvision.models.get_model(args["model"], weights='IMAGENET1K_V2')
     model_xai.load_model_to_explain(f_model)
     for img in list_img_test:
         args["sam_img_in"] = model_xai.load_img(
