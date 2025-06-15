@@ -177,8 +177,6 @@ class Model_PIE(torch.nn.Module):
         self.logging("PIE : Prédiction du modèle f_model sur cette liste")
         target_probabilities = []
         list_images_masked = []
-        
-        list_images_masked = []
         for mask_vec in list_masks:
             indices = np.where(mask_vec == 1)[0]
             if len(indices) == 0:
@@ -226,46 +224,9 @@ class Model_PIE(torch.nn.Module):
         :param (int) n_mc_sample:   nombre d’échantillons Monte-Carlo
         :return:                 tuple (list_images_masked, list_idx_masks, list_fused_masks)
         """
-        # list_images_masked = []
-        # list_idx_masks = []
-        # list_fused_masks = []
         num_masks = len(list_of_mask)
 
         return np.random.binomial(1,0.5,size=(n_mc_sample,num_masks))
-    
-        # for i in range(n_mc_sample):
-        #     # 1-Choix du nombre de masque
-        #     num_to_fuse = np.random.randint(1, num_masks + 1)
-        #     # 2-Choix des indices mask
-        #     indices_to_fuse = np.random.choice(num_masks, num_to_fuse, replace=False)
-        #     # 3-Fusionner les masques choisis
-        #     fused_mask = Model_PIE._fuse_masks(list_of_mask, indices_to_fuse)
-        #     # 4-Créer la nouvelle image
-        #     # masked_image = image * np.stack([fused_mask] * 3, axis=-1)
-        #     masked_image = image * fused_mask[:, :, np.newaxis]
-
-        #     list_images_masked.append(masked_image)
-        #     list_idx_masks.append(indices_to_fuse.tolist())
-        #     list_fused_masks.append(fused_mask)
-
-        # return list_images_masked, list_idx_masks, list_fused_masks
-
-    @staticmethod
-    def _fuse_masks(list_of_mask, list_idx) -> npt.NDArray[bool]:
-        """Fusionne plusieurs masque.
-
-        :param list_of_mask:    liste des masques
-        :param list_idx:        liste des indices des masques à fusionner
-        :return:    le masque global fusionné des sous-masque donnés
-        """
-        new_mask = np.zeros(list_of_mask[0].shape, dtype=bool)
-        if not isinstance(list_idx, Iterable):
-            list_idx = [list_idx]
-
-        for i in list_idx:
-            new_mask = np.logical_or(new_mask, list_of_mask[i])
-
-        return new_mask
 
 
 class Model_EAC:
@@ -687,12 +648,10 @@ class Model_EAC:
                 image, list_of_mask, n_mc_sample=shapley_mc)
             batch_mask_false = batch_mask.copy()
             # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
-            with torch.no_grad():
-                batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
             model_pie = self.pie.eval().to(self.device)
-            batch_mask_false[:,i] = 0
-            batch_mask[:,i] =1 
             with torch.no_grad():
+                batch_mask_false[:,i] = 0
+                batch_mask[:,i] =1 
                 batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
                 batch_mask_false = torch.tensor(
                     np.array(batch_mask_false), dtype=torch.float32).to(self.device)
