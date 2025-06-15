@@ -4,6 +4,8 @@
 
 Implémentation du papier EAC : https://proceedings.neurips.cc/paper_files/paper/2023/file/44cdeb5ab7da31d9b5cd88fd44e3da84-Paper-Conference.pdf
 
+Notre  : [Explain_Any_Concept_Review_Paper](Explain_Any_Concept_Review_Paper.pdf)
+
 ## **Description :**
 
 L'ensemble de ce dépôt dépeint l'implémentation de EAC (Explain Any Concept).
