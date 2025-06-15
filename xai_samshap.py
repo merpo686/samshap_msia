@@ -178,8 +178,14 @@ class Model_PIE(torch.nn.Module):
         target_probabilities = []
         list_images_masked = []
         
-        # multiply the masks to each mask 
-        list_images_masked = [image * mask[:, :, np.newaxis] for mask in list_masks]
+        list_images_masked = []
+        for mask_vec in list_masks:
+            indices = np.where(mask_vec == 1)[0]
+            if len(indices) == 0:
+                fused_mask = np.zeros_like(list_of_mask[0], dtype=bool)
+            else:
+                fused_mask = np.logical_or.reduce([list_of_mask[i] for i in indices])
+            list_images_masked.append(image * fused_mask[:, :, np.newaxis])
         
         for masked_image in list_images_masked:
             input_tensor = transform_img(masked_image).to(device)
@@ -684,7 +690,6 @@ class Model_EAC:
             with torch.no_grad():
                 batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
             model_pie = self.pie.eval().to(self.device)
-            probas_concept = {True: np.array(0.), False: np.array(0.)}
             batch_mask_false[:,i] = 0
             batch_mask[:,i] =1 
             with torch.no_grad():
