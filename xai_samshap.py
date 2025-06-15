@@ -170,12 +170,17 @@ class Model_PIE(torch.nn.Module):
         # Changement, nombre de sous-ensemble est l'arrangement donc n! et donc au-delà de 20 Python ne gère pas et MemoryError
         self.logging(
             f"PIE : Création liste de sous-ensemble de masque via MC ({n_samples=})")
-        list_images_masked, list_idx_masks, list_fused_masks = self._image_to_masks_mc(
+        list_masks = self._image_to_masks_mc(
             image, list_of_mask, n_samples)
 
         # 2-Récupération des probabilités de prédiction du modèle
         self.logging("PIE : Prédiction du modèle f_model sur cette liste")
         target_probabilities = []
+        list_images_masked = []
+        
+        # multiply the masks to each mask 
+        list_images_masked = [image * mask[:, :, np.newaxis] for mask in list_masks]
+        
         for masked_image in list_images_masked:
             input_tensor = transform_img(masked_image).to(device)
             with torch.no_grad():
@@ -184,11 +189,7 @@ class Model_PIE(torch.nn.Module):
                 target_probabilities.append(probabilities.squeeze().cpu().numpy())
 
         # 3-Préparation des données d'entraînement
-        input_data = []
-        for combo in list_idx_masks:
-            concept_vector = np.zeros(n_concept)
-            concept_vector[combo] = 1
-            input_data.append(concept_vector)
+        input_data = list_masks
 
         input_data = torch.tensor(np.array(input_data), dtype=torch.float32).to(device)
         target_probabilities = torch.tensor(
@@ -219,27 +220,29 @@ class Model_PIE(torch.nn.Module):
         :param (int) n_mc_sample:   nombre d’échantillons Monte-Carlo
         :return:                 tuple (list_images_masked, list_idx_masks, list_fused_masks)
         """
-        list_images_masked = []
-        list_idx_masks = []
-        list_fused_masks = []
+        # list_images_masked = []
+        # list_idx_masks = []
+        # list_fused_masks = []
         num_masks = len(list_of_mask)
 
-        for i in range(n_mc_sample):
-            # 1-Choix du nombre de masque
-            num_to_fuse = np.random.randint(1, num_masks + 1)
-            # 2-Choix des indices mask
-            indices_to_fuse = np.random.choice(num_masks, num_to_fuse, replace=False)
-            # 3-Fusionner les masques choisis
-            fused_mask = Model_PIE._fuse_masks(list_of_mask, indices_to_fuse)
-            # 4-Créer la nouvelle image
-            # masked_image = image * np.stack([fused_mask] * 3, axis=-1)
-            masked_image = image * fused_mask[:, :, np.newaxis]
+        return np.random.binomial(1,0.5,size=(n_mc_sample,num_masks))
+    
+        # for i in range(n_mc_sample):
+        #     # 1-Choix du nombre de masque
+        #     num_to_fuse = np.random.randint(1, num_masks + 1)
+        #     # 2-Choix des indices mask
+        #     indices_to_fuse = np.random.choice(num_masks, num_to_fuse, replace=False)
+        #     # 3-Fusionner les masques choisis
+        #     fused_mask = Model_PIE._fuse_masks(list_of_mask, indices_to_fuse)
+        #     # 4-Créer la nouvelle image
+        #     # masked_image = image * np.stack([fused_mask] * 3, axis=-1)
+        #     masked_image = image * fused_mask[:, :, np.newaxis]
 
-            list_images_masked.append(masked_image)
-            list_idx_masks.append(indices_to_fuse.tolist())
-            list_fused_masks.append(fused_mask)
+        #     list_images_masked.append(masked_image)
+        #     list_idx_masks.append(indices_to_fuse.tolist())
+        #     list_fused_masks.append(fused_mask)
 
-        return list_images_masked, list_idx_masks, list_fused_masks
+        # return list_images_masked, list_idx_masks, list_fused_masks
 
     @staticmethod
     def _fuse_masks(list_of_mask, list_idx) -> npt.NDArray[bool]:
@@ -674,35 +677,27 @@ class Model_EAC:
         # 2-Calcul des valeurs de Shapley pour chaque masque
         for i in tqdm(range(nb_mask), desc="Calcul Shapley"):
             # 2.1-échantillonnage par Monte-Carlo de masques
-            _, list_idx_masks, _ = self.pie._image_to_masks_mc(
+            batch_mask = self.pie._image_to_masks_mc(
                 image, list_of_mask, n_mc_sample=shapley_mc)
-            batch_mask = []
-            for combo in list_idx_masks:
-                concept_vector = np.zeros(self.pie.linear[0].in_features)
-                concept_vector[combo] = 1
-                batch_mask.append(concept_vector)
-
+            batch_mask_false = batch_mask.copy()
             # 2.2-calcul de la proba du PIE avec ou sans le concept sur la liste des sous-masques
             with torch.no_grad():
                 batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
             model_pie = self.pie.eval().to(self.device)
             probas_concept = {True: np.array(0.), False: np.array(0.)}
-            for with_concept in probas_concept:
-                # Mettre à jour la liste des masques avec ou non le concept à étudier
-                for mask in batch_mask:
-                    # on met le concept i à 0 pour le False
-                    mask[i] = 0
-                    if with_concept:
-                        mask[i] = 1  # on met le concept i à 1 pour le True
-                with torch.no_grad():
-                    outs = model_pie(batch_mask)
-                    probas = torch.nn.functional.softmax(outs, dim=1)
-                    probas_concept[with_concept] = probas[:,
-                                                          self.label_predicted]  # (shapley_mc,)
+            batch_mask_false[:,i] = 0
+            batch_mask[:,i] =1 
+            with torch.no_grad():
+                batch_mask = torch.tensor(np.array(batch_mask), dtype=torch.float32).to(self.device)
+                batch_mask_false = torch.tensor(
+                    np.array(batch_mask_false), dtype=torch.float32).to(self.device)
+                outs = model_pie(batch_mask)
+                outs_false = model_pie(batch_mask_false)
+                probas = torch.nn.functional.softmax(outs, dim=1)[:,self.label_predicted] 
+                probas_false = torch.nn.functional.softmax(outs_false, dim=1)[:,self.label_predicted] 
 
             # 2.3-Calcul de Shapley moyenne
-            shapley_values[i] = (probas_concept[True] -
-                                 probas_concept[False]).mean().item()
+            shapley_values[i] = (probas -probas_false).mean().item()
 
         return shapley_values
 
