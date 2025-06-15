@@ -4,11 +4,17 @@
 
 Implémentation du papier EAC : https://proceedings.neurips.cc/paper_files/paper/2023/file/44cdeb5ab7da31d9b5cd88fd44e3da84-Paper-Conference.pdf
 
-Notre revue : [Explain_Any_Concept_Review_Paper](Explain_Any_Concept_Review_Paper.pdf)
-
 ## **Description :**
 
 L'ensemble de ce dépôt dépeint l'implémentation de EAC (Explain Any Concept).
+
+- Arborescence :
+  - **xai_samshap.py** : l'implémentation EAC pour l'exécuter ou lancer les tests (cf. §usage)
+  - **human_eval.py** : l'outil IHM d'évaluation humaine de pertinence d'explication entre différents résultats de plusieurs modèles.
+  - ***data/*** : dossier contenant les exemples de résultat des masques explicatifs
+ 
+Notre rapport est disponible à :  [Explain_Any_Concept_Review_Paper](Explain_Any_Concept_Review_Paper.pdf)
+
 
 ## **Usages :**
 
@@ -17,6 +23,7 @@ L'ensemble de ce dépôt dépeint l'implémentation de EAC (Explain Any Concept)
 ```bash
 git clone https://github.com/merpo686/samshap_msia.git
 cd samshap_msia
+python -m pip install -r requirements.txt
 git clone https://github.com/facebookresearch/segment-anything.git SAM
 sed -i "s/torch.load(f)/torch.load(f, weights_only=True)/g" SAM/segment_anything/build_sam.py
 ```
@@ -82,6 +89,12 @@ model_eac.results
   # model_eac.results["sam"]
   # model_eac.results["mask"]
 ```
+
+### **Réalisation des tests humains avec l'IHM :**
+```bash
+python human_eval.py
+```
+
 
 ## **Étudiants :**
 
