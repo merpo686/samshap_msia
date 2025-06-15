@@ -56,8 +56,8 @@ DEFAULT_LOG_FOLDER: Final[str] = "logs"
 DEFAULT_LOG_FILENAME: Final[str] = "pipeline.log"
 DEFAULT_MODEL_FOLDER: Final[str] = "checkpoints"
 DEFAULT_SAM_MODEL: Final[str] = "vit_b"
-DEFAULT_MODEL_TEST: Final[str] = "resnet18"
-DEFAULT_SHAPLEY_MC_SAMPLING: Final[int] = 10_000
+DEFAULT_MODEL_TEST: Final[str] = "resnet50"
+DEFAULT_SHAPLEY_MC_SAMPLING: Final[int] = 50_000
 DEFAULT_PIE_MC_SAMPLING: Final[int] = 2_500
 DEFAULT_PIE_EPOCH: Final[int] = 50
 
@@ -425,7 +425,6 @@ class Model_EAC:
         checkpoint_path = os.path.join(model_dir, os.path.basename(url))
         self.logging(f"Chargement SAM de {checkpoint_path}")
         model = sam_model_registry[model_type](checkpoint=checkpoint_path)
-
         return model
 
     def load_pie(self, pie_args: dict | None = None) -> Model_PIE:
@@ -440,7 +439,6 @@ class Model_EAC:
         if pie_args is not None:
             self.logging(f"Chargement du PIE avec {pie_args=}")
             model = Model_PIE(pie_args, self.model_fc, logger_master=self)
-
         return model
 
     def load_img(self, args: dict | str,
@@ -607,11 +605,7 @@ class Model_EAC:
         timing = f"--- {time.time() - start_time:.2f} seconds ---"
         self.logging(
             f"EAC : => {timing} mask={idx_max}, Shapley={shapley_values[idx_max]}")
-        # save masked image
-        # image_masked_save = transforms.ToPILImage()(image_masked_max)
-        # image_masked_save.save("image_masked_max.png")
-        # image_masked_save = transforms.ToPILImage()(image_rgb)
-        # image_masked_save.save("image_original.png")
+
         # 7-Calcul AUC
         self.logging("EAC : Calcul des AUC ...")
         auc_deletion = self.calc_auc(
@@ -919,7 +913,7 @@ def parse_args(args_str: str | None = None) -> argparse.Namespace:
     # 2 - Création du parseur à arguments:
     parser = argparse.ArgumentParser(prog="EAC",
                                      description="Lance la XAI avec le EAC.",
-                                     epilog="Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet18 --device=cuda ")
+                                     epilog="Exemples : python xai_samshap.py --input=dog.jpeg --sam_type vit_b --model=resnet50 --device=cuda ")
 
     # 3 - Définition des arguments :
     parser.add_argument("--task", type=str, choices=list_task_agentIA, default="run",
