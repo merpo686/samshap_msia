@@ -16,7 +16,7 @@ importlib.reload(p)
 """
 __author__ = ['Nicolas Allègre', 'Louis Borreill', 'Merlin Poitou']
 __date__ = '11/06/2025'
-__version__ = '0.2'
+__version__ = '0.5'
 
 ###############################################################################
 # IMPORTS :
@@ -46,6 +46,7 @@ from tqdm import tqdm
 IA_AGENT_SAM_FOLDER = "SAM"
 sys.path.append(IA_AGENT_SAM_FOLDER)
 from SAM.segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+
 ###############################################################################
 # CONSTANTES :
 EXIT_OK: Final[int] = 0

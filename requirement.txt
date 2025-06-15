@@ -1,0 +1,12 @@
+# Modules standards Torch
+torch
+torchvision
+
+# Modules pour IA
+numpy
+scikit-learn
+
+# Autres modules
+matplotlib
+pprint
+tqdm
